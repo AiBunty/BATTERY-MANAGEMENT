@@ -1,0 +1,10 @@
+.u-flex { display: flex; }
+.u-between { justify-content: space-between; }
+.u-center { align-items: center; }
+.u-gap-8 { gap: 8px; }
+.u-gap-12 { gap: 12px; }
+.u-mb-8 { margin-bottom: 8px; }
+.u-mb-12 { margin-bottom: 12px; }
+.u-mb-16 { margin-bottom: 16px; }
+.u-muted { color: var(--color-muted); }
+.u-hidden { display: none !important; }

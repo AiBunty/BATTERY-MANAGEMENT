@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Dashboard</title>
+  <link rel="stylesheet" href="../../assets/css/base.css">
+  <link rel="stylesheet" href="../../assets/css/theme.css">
+  <link rel="stylesheet" href="../../assets/css/layout.css">
+  <link rel="stylesheet" href="../../assets/css/components.css">
+  <link rel="stylesheet" href="../../assets/css/utilities.css">
+</head>
+<body data-page="admin-dashboard" data-role="ADMIN">
+  <div id="app-shell"></div>
+  <section class="u-hidden" data-page-content>
+    <div class="u-mb-16">
+      <h1>Admin Dashboard</h1>
+      <p class="u-muted">Operations and warranty command center</p>
+    </div>
+    <div class="content-grid">
+      <article class="card card--kpi col-4"><div class="kpi-value">124</div><p class="u-muted">Open Claims</p></article>
+      <article class="card card--kpi col-4"><div class="kpi-value">36</div><p class="u-muted">Active Routes</p></article>
+      <article class="card card--kpi col-4"><div class="kpi-value">92%</div><p class="u-muted">SLA Compliance</p></article>
+      <article class="card col-12">
+        <div class="u-flex u-between u-center u-mb-12"><strong>Recent Claims</strong><button class="btn btn--primary" type="button">Export</button></div>
+        <table class="table">
+          <thead><tr><th>Claim #</th><th>Dealer</th><th>Status</th><th>Updated</th></tr></thead>
+          <tbody>
+            <tr><td>DEFAULT-CLM-2026-00101</td><td>Dealer North</td><td><span class="badge badge--warning">AT_SERVICE</span></td><td>10m ago</td></tr>
+            <tr><td>DEFAULT-CLM-2026-00102</td><td>Dealer East</td><td><span class="badge badge--success">READY_FOR_RETURN</span></td><td>24m ago</td></tr>
+          </tbody>
+        </table>
+      </article>
+    </div>
+  </section>
+  <script type="module" src="../../assets/js/app.js"></script>
+</body>
+</html>

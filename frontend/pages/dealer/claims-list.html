@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Claims</title>
+  <link rel="stylesheet" href="../../assets/css/base.css">
+  <link rel="stylesheet" href="../../assets/css/theme.css">
+  <link rel="stylesheet" href="../../assets/css/layout.css">
+  <link rel="stylesheet" href="../../assets/css/components.css">
+  <link rel="stylesheet" href="../../assets/css/utilities.css">
+</head>
+<body data-page="dealer-claims" data-role="DEALER">
+  <div id="app-shell"></div>
+  <section class="u-hidden" data-page-content>
+    <div class="u-flex u-between u-center u-mb-16">
+      <div><h1>My Claims</h1><p class="u-muted">Warranty claim tracker</p></div>
+      <a class="btn btn--primary" href="new-claim.html">Create Claim</a>
+    </div>
+    <article class="card u-mb-12">
+      <div class="u-flex u-gap-12">
+        <select id="status-filter" class="input" style="max-width:180px">
+          <option value="">All Status</option>
+          <option value="DRAFT">DRAFT</option>
+          <option value="SUBMITTED">SUBMITTED</option>
+          <option value="IN_TRANSIT">IN_TRANSIT</option>
+          <option value="AT_SERVICE">AT_SERVICE</option>
+          <option value="DIAGNOSED">DIAGNOSED</option>
+          <option value="REPLACED">REPLACED</option>
+          <option value="READY_FOR_RETURN">READY_FOR_RETURN</option>
+          <option value="CLOSED">CLOSED</option>
+        </select>
+        <button class="btn btn--secondary" id="reload-btn" type="button">Refresh</button>
+      </div>
+    </article>
+    <article class="card">
+      <table class="table">
+        <thead><tr><th>Claim #</th><th>Battery Serial</th><th>Status</th><th>Date</th><th></th></tr></thead>
+        <tbody id="claims-tbody"><tr><td colspan="5" class="u-muted">Loading…</td></tr></tbody>
+      </table>
+    </article>
+  </section>
+  <script type="module" src="../../assets/js/app.js"></script>
+  <script type="module">
+    import { fetchClaims } from '../../assets/js/claims-ui.js';
+    import { showToast } from '../../assets/js/ui.js';
+
+    const BADGE = {
+      DRAFT: 'badge',
+      SUBMITTED: 'badge badge--warning',
+      DRIVER_RECEIVED: 'badge badge--warning',
+      IN_TRANSIT: 'badge badge--warning',
+      AT_SERVICE: 'badge badge--warning',
+      DIAGNOSED: 'badge badge--warning',
+      REPLACED: 'badge badge--success',
+      READY_FOR_RETURN: 'badge badge--success',
+      CLOSED: 'badge',
+    };
+
+    async function load(status) {
+      const tbody = document.getElementById('claims-tbody');
+      if (!tbody) return;
+      tbody.innerHTML = '<tr><td colspan="5" class="u-muted">Loading…</td></tr>';
+      try {
+        const res = await fetchClaims(status);
+        const claims = res?.data?.claims ?? [];
+        if (!claims.length) {
+          tbody.innerHTML = '<tr><td colspan="5" class="u-muted">No claims found.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = claims.map(c => {
+          const date = new Date(c.created_at).toLocaleDateString();
+          return `<tr>
+            <td>${c.claim_number}</td>
+            <td>${c.serial_number}</td>
+            <td><span class="${BADGE[c.status] ?? 'badge'}">${c.status}</span></td>
+            <td>${date}</td>
+            <td><button class="btn btn--secondary" type="button">View</button></td>
+          </tr>`;
+        }).join('');
+      } catch (err) {
+        showToast(err.message ?? 'Failed to load claims', 'error');
+        tbody.innerHTML = '<tr><td colspan="5" class="u-muted">Error loading claims.</td></tr>';
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      load('');
+      const filter = document.getElementById('status-filter');
+      if (filter) filter.addEventListener('change', () => load(filter.value));
+      const reload = document.getElementById('reload-btn');
+      if (reload) reload.addEventListener('click', () => load(filter?.value ?? ''));
+    });
+  </script>
+</body>
+</html>

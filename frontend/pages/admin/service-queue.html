@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Service Queue</title>
+  <link rel="stylesheet" href="../../assets/css/base.css">
+  <link rel="stylesheet" href="../../assets/css/theme.css">
+  <link rel="stylesheet" href="../../assets/css/layout.css">
+  <link rel="stylesheet" href="../../assets/css/components.css">
+  <link rel="stylesheet" href="../../assets/css/utilities.css">
+</head>
+<body data-page="service-queue" data-role="TESTER">
+  <div id="app-shell"></div>
+  <section class="u-hidden" data-page-content>
+    <div class="u-mb-16">
+      <h1>Service Queue</h1>
+      <p class="u-muted">Testing bay and technician assignment queue</p>
+    </div>
+    <div class="content-grid">
+      <article class="card col-8">
+        <div class="u-flex u-between u-center u-mb-12"><strong>Pending Tests</strong><button class="btn btn--primary" type="button">Assign Batch</button></div>
+        <table class="table">
+          <thead><tr><th>Ticket</th><th>Battery</th><th>Dealer</th><th>Priority</th></tr></thead>
+          <tbody>
+            <tr><td>SRV-2201</td><td>AM-120AH</td><td>Dealer North</td><td><span class="badge badge--warning">HIGH</span></td></tr>
+            <tr><td>SRV-2202</td><td>AM-95AH</td><td>Dealer West</td><td><span class="badge">NORMAL</span></td></tr>
+          </tbody>
+        </table>
+      </article>
+      <article class="card card--kpi col-4"><div class="kpi-value">28</div><p class="u-muted">Open Service Tickets</p></article>
+    </div>
+  </section>
+  <script type="module" src="../../assets/js/app.js"></script>
+</body>
+</html>

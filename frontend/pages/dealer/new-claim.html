@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>New Claim</title>
+  <link rel="stylesheet" href="../../assets/css/base.css">
+  <link rel="stylesheet" href="../../assets/css/theme.css">
+  <link rel="stylesheet" href="../../assets/css/layout.css">
+  <link rel="stylesheet" href="../../assets/css/components.css">
+  <link rel="stylesheet" href="../../assets/css/utilities.css">
+</head>
+<body data-page="dealer-new-claim" data-role="DEALER">
+  <div id="app-shell"></div>
+  <section class="u-hidden" data-page-content>
+    <div class="u-mb-16">
+      <h1>Create Warranty Claim</h1>
+      <p class="u-muted">Capture battery details and failure evidence</p>
+    </div>
+    <div class="content-grid">
+      <article class="card col-8">
+        <div class="u-mb-12"><strong>Claim Form</strong></div>
+        <div class="u-mb-12">
+          <label>Battery Serial</label>
+          <div class="u-flex u-gap-12">
+            <input id="serial-input" class="input" type="text" placeholder="AMR-78A3-2219" autocomplete="off">
+            <button class="btn btn--secondary" id="check-serial-btn" type="button">Check</button>
+          </div>
+          <p id="serial-status" class="u-muted" style="margin-top:6px;font-size:.85rem"></p>
+        </div>
+        <div class="u-mb-12">
+          <label>Failure Notes</label>
+          <textarea id="complaint-input" class="input" rows="4" placeholder="Describe the observed issue"></textarea>
+        </div>
+        <button class="btn btn--primary" id="submit-btn" type="button" disabled>Submit Claim</button>
+      </article>
+      <article class="card col-4">
+        <strong>Validation Checklist</strong>
+        <ul id="checklist" style="margin-top:10px;padding-left:16px">
+          <li id="check-serial-li" style="color:var(--color-muted)">Battery serial verified</li>
+          <li id="check-notes-li" style="color:var(--color-muted)">Failure notes entered</li>
+        </ul>
+        <div id="claim-result" class="u-mt-12" style="display:none">
+          <strong>Claim Created</strong>
+          <p id="claim-number-out" class="u-muted"></p>
+          <a id="track-link-out" class="btn btn--secondary u-mt-8" style="display:none" target="_blank">Track Battery</a>
+        </div>
+      </article>
+    </div>
+  </section>
+  <script type="module" src="../../assets/js/app.js"></script>
+  <script type="module">
+    import { checkSerial, createClaim } from '../../assets/js/claims-ui.js';
+    import { showToast } from '../../assets/js/ui.js';
+
+    let serialVerified = false;
+
+    function updateChecklist() {
+      const liSerial = document.getElementById('check-serial-li');
+      const liNotes  = document.getElementById('check-notes-li');
+      const btn      = document.getElementById('submit-btn');
+      const notes    = (document.getElementById('complaint-input')?.value ?? '').trim();
+
+      if (liSerial) liSerial.style.color = serialVerified ? 'var(--color-success)' : 'var(--color-muted)';
+      if (liNotes)  liNotes.style.color  = notes ? 'var(--color-success)' : 'var(--color-muted)';
+      if (btn) btn.disabled = !(serialVerified && notes);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const checkBtn   = document.getElementById('check-serial-btn');
+      const submitBtn  = document.getElementById('submit-btn');
+      const serialIn   = document.getElementById('serial-input');
+      const statusEl   = document.getElementById('serial-status');
+      const notesIn    = document.getElementById('complaint-input');
+
+      if (notesIn) notesIn.addEventListener('input', updateChecklist);
+
+      if (checkBtn) {
+        checkBtn.addEventListener('click', async () => {
+          const serial = (serialIn?.value ?? '').trim();
+          if (!serial) { showToast('Enter a battery serial', 'warning'); return; }
+          checkBtn.disabled = true;
+          checkBtn.textContent = 'Checking…';
+          try {
+            const res = await checkSerial(serial);
+            const data = res?.data;
+            serialVerified = true;
+            statusEl.textContent = `✓ Serial ${data.serial} is valid${data.is_orange_tick ? ' (Orange Tick)' : ''}`;
+            statusEl.style.color = 'var(--color-success)';
+          } catch (err) {
+            serialVerified = false;
+            statusEl.textContent = err.message ?? 'Serial not found';
+            statusEl.style.color = 'var(--color-danger)';
+          } finally {
+            checkBtn.disabled = false;
+            checkBtn.textContent = 'Check';
+            updateChecklist();
+          }
+        });
+      }
+
+      if (submitBtn) {
+        submitBtn.addEventListener('click', async () => {
+          const serial    = (serialIn?.value ?? '').trim();
+          const complaint = (notesIn?.value ?? '').trim();
+          submitBtn.disabled = true;
+          submitBtn.textContent = 'Submitting…';
+          try {
+            const res = await createClaim({ serial, complaint });
+            const data = res?.data;
+            showToast('Claim created: ' + data.claim_number, 'success');
+            document.getElementById('claim-result').style.display = 'block';
+            document.getElementById('claim-number-out').textContent = data.claim_number;
+            if (data.tracking_url) {
+              const link = document.getElementById('track-link-out');
+              link.href = data.tracking_url;
+              link.style.display = '';
+            }
+            serialVerified = false;
+            serialIn.value = '';
+            notesIn.value  = '';
+            updateChecklist();
+          } catch (err) {
+            showToast(err.message ?? 'Claim creation failed', 'error');
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Submit Claim';
+          }
+        });
+      }
+    });
+  </script>
+</body>
+</html>

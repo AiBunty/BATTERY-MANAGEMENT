@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AAMRON Battery Management Shell</title>
+  <link rel="stylesheet" href="/assets/css/aamron-theme.css">
+</head>
+<body>
+  <main class="theme-shell">
+    <nav class="shell-nav">
+      <img src="/assets/logos/aamron-logo-light.svg" alt="AAMRON Batteries logo" height="40">
+      <div class="shell-links">
+        <a class="shell-link" href="/dashboard">Dashboard</a>
+        <a class="shell-link" href="/theme-preview.html">Theme Preview</a>
+        <a class="shell-link" href="/api/v1/track/lookup">API</a>
+      </div>
+    </nav>
+
+    <section class="hero">
+      <div class="hero-logo-row">
+        <img src="/assets/logos/aamron-logo-dark.svg" alt="AAMRON Batteries alternate logo">
+      </div>
+      <h1 class="hero-title">AAMRON Battery Management Web Shell</h1>
+      <p class="hero-subtitle">Brand-colored shell is now active on root and dashboard routes, ready to host module screens.</p>
+      <div class="toolbar">
+        <button class="btn btn-primary" type="button">New Claim</button>
+        <button class="btn btn-secondary" type="button">CRM Campaign</button>
+      </div>
+    </section>
+
+    <section class="route-grid">
+      <article class="route-card">
+        <h4>Auth</h4>
+        <p class="route-path">/api/v1/auth/send-otp</p>
+        <span class="route-method">POST</span>
+      </article>
+      <article class="route-card">
+        <h4>Claims</h4>
+        <p class="route-path">/api/v1/claims</p>
+        <span class="route-method">POST</span>
+      </article>
+      <article class="route-card">
+        <h4>CRM</h4>
+        <p class="route-path">/api/v1/crm/campaigns/dispatch</p>
+        <span class="route-method">POST</span>
+      </article>
+      <article class="route-card">
+        <h4>Tracking</h4>
+        <p class="route-path">/api/v1/track/{token}</p>
+        <span class="route-method">GET</span>
+      </article>
+    </section>
+
+    <section class="panel-grid">
+      <article class="panel">
+        <h3>Brand Token</h3>
+        <div class="kpi">AAMRON Green</div>
+        <div class="kpi-footnote">Primary: #1f6f43 | Accent: #a6cf4a</div>
+      </article>
+      <article class="panel">
+        <h3>Ready Modules</h3>
+        <div class="kpi">5</div>
+        <div class="kpi-footnote">Claims, Driver, Service, CRM, Tracking</div>
+      </article>
+      <article class="panel">
+        <h3>Status</h3>
+        <div class="kpi">Production-Ready</div>
+        <div class="kpi-footnote">Pre-release checks passing</div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>

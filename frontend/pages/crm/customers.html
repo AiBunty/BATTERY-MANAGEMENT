@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Customer Portfolio</title>
+  <link rel="stylesheet" href="../../assets/css/base.css">
+  <link rel="stylesheet" href="../../assets/css/theme.css">
+  <link rel="stylesheet" href="../../assets/css/layout.css">
+  <link rel="stylesheet" href="../../assets/css/components.css">
+  <link rel="stylesheet" href="../../assets/css/utilities.css">
+</head>
+<body data-page="crm-customers" data-role="CRM_MGR">
+  <div id="app-shell"></div>
+  <section class="u-hidden" data-page-content>
+    <div class="u-mb-16">
+      <h1>Customer Portfolio</h1>
+      <p class="u-muted">Account segmentation and engagement snapshot</p>
+    </div>
+    <div class="content-grid">
+      <article class="card col-12">
+        <div class="u-flex u-between u-center u-mb-12">
+          <strong>Customer Portfolio</strong>
+          <div class="u-flex u-gap-12">
+            <select id="lifecycle-filter" class="input" style="width:auto">
+              <option value="">All Stages</option>
+              <option value="LEAD">Lead</option>
+              <option value="PROSPECT">Prospect</option>
+              <option value="ACTIVE">Active</option>
+              <option value="REPEAT">Repeat</option>
+              <option value="CHURNED">Churned</option>
+            </select>
+          </div>
+        </div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Name</th><th>Email</th><th>City</th><th>Stage</th><th>Batteries</th><th>Since</th>
+            </tr>
+          </thead>
+          <tbody id="customers-tbody">
+            <tr><td colspan="6" class="u-muted">Loading…</td></tr>
+          </tbody>
+        </table>
+      </article>
+    </div>
+  </section>
+  <script type="module" src="../../assets/js/app.js"></script>
+  <script type="module">
+    import { fetchCustomers } from '../../assets/js/crm.js';
+    import { showToast } from '../../assets/js/ui.js';
+
+    const STAGE_CLASS = {
+      LEAD:     'badge',
+      PROSPECT: 'badge badge--warning',
+      ACTIVE:   'badge badge--success',
+      REPEAT:   'badge badge--success',
+      CHURNED:  'badge badge--danger',
+    };
+
+    async function load(stage) {
+      const tbody = document.getElementById('customers-tbody');
+      if (tbody) tbody.innerHTML = '<tr><td colspan="6" class="u-muted">Loading…</td></tr>';
+      try {
+        const res = await fetchCustomers(stage || null, 50);
+        const customers = res?.data?.customers ?? [];
+        if (!tbody) return;
+        if (!customers.length) {
+          tbody.innerHTML = '<tr><td colspan="6" class="u-muted">No customers found.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = customers.map(c => `
+          <tr>
+            <td>${c.name ?? '—'}</td>
+            <td>${c.email ?? '—'}</td>
+            <td>${c.city ?? '—'}</td>
+            <td><span class="${STAGE_CLASS[c.lifecycle_stage] ?? 'badge'}">${c.lifecycle_stage ?? '—'}</span></td>
+            <td>${c.total_batteries_bought ?? 0}</td>
+            <td>${c.created_at ? c.created_at.slice(0, 10) : '—'}</td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        showToast(err.message ?? 'Failed to load customers', 'error');
+        const tbody2 = document.getElementById('customers-tbody');
+        if (tbody2) tbody2.innerHTML = '<tr><td colspan="6" class="u-muted">Error loading data.</td></tr>';
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      load('');
+      document.getElementById('lifecycle-filter')?.addEventListener('change', e => load(e.target.value));
+    });
+  </script>
+</body>
+</html>

@@ -3,7 +3,7 @@
 **Stack:** PHP 8.2+ · MySQL 8.0+ · Redis · Vanilla JS (ES2020) / PWA · Google Maps API  
 **Architecture:** Modular Monolith — API-first, Multi-tenant, SaaS-ready  
 **Date:** April 2026  
-**Version:** 3.0
+**Version:** 4.1
 
 ---
 
@@ -11,15 +11,17 @@
 1. [System Overview](#1-system-overview)
 2. [Role Matrix](#2-role-matrix)
 3. [Folder Structure](#3-folder-structure) — Modular Monolith
-4. [Database Schema (SQL)](#4-database-schema-sql) — 30 Tables (incl. SaaS layer)
-5. [Core Business Logic](#5-core-business-logic) — 14 Sections
+4. [Database Schema (SQL)](#4-database-schema-sql) — 52 Tables (incl. SaaS + CRM + Tracking layer)
+5. [Core Business Logic](#5-core-business-logic) — 22 Sections
 6. [API Route Map](#6-api-route-map) — Versioned `/api/v1/`
 7. [JS: Client-Side Image Compression](#7-js-client-side-image-compression)
 8. [Security Architecture](#8-security-architecture)
 9. [Analytics & Reporting](#9-analytics--reporting)
 10. [Deployment Notes](#10-deployment-notes)
-11. [Deep Risk Register](#11-deep-risk-register--additional-vulnerabilities-found) — 15 Items
+11. [Deep Risk Register](#11-deep-risk-register--additional-vulnerabilities-found) — 22 Items
 12. [SaaS Architecture & Upgrade Roadmap](#12-saas-architecture--upgrade-roadmap)
+13. [CRM Module — Customer Pipeline, Campaigns & Schemes](#13-crm-module--customer-pipeline-campaigns--schemes)
+14. [Public Repair Status Tracking](#14-public-repair-status-tracking)
 
 ---
 
@@ -39,7 +41,8 @@
 │  ↓                                                                         │
 │  Modules: Identity · Tenancy · Claims · Batteries · Drivers                │
 │           ServiceCenter · Inventory · Finance · Files · Notifications      │
-│           Reports · Audit                                                  │
+│           Reports · Audit · **CRM** (Pipeline · Campaigns · Schemes)       │
+│           **Tracking** (Public repair status — no-login token URLs)         │
 │  ↓                                                                         │
 │  Shared/Queue (Redis) ── Shared/Storage (Local→S3) ── EventBus            │
 └────────────────────────────┬───────────────────────────────────────────────┘
@@ -79,21 +82,28 @@
 
 ## 2. Role Matrix
 
-| Permission | ADMIN | SUPER_MGR | DISPATCH_MGR | DEALER | DRIVER | TESTER | INV_MGR |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| Tally Import/Export | ✓ | ✓ | | | | | |
-| Manage Users | ✓ | ✓ | | | | | |
-| Settings | ✓ | | | | | | |
-| Create Claim | | | | ✓ | | | |
-| Edit Claim (pre-lock) | | | | ✓ | | | |
-| View Claims | ✓ | ✓ | ✓ | Own | Assigned | | ✓ |
-| Assign Driver Route | | | ✓ | | | | |
-| Driver Mobile UI | | | | | ✓ | | |
-| Inward Battery | | | | | | ✓* | ✓ |
-| Diagnose Battery | | | | | | ✓ | |
-| Assign Replacement | | | | | | | ✓ |
-| Run Reports | ✓ | ✓ | ✓ | | | | |
-| Finance Report | ✓ | ✓ | | | | | |
+| Permission | ADMIN | SUPER_MGR | DISPATCH_MGR | DEALER | DRIVER | TESTER | INV_MGR | CRM_MGR | MARKETING |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Tally Import/Export | ✓ | ✓ | | | | | | | |
+| Manage Users | ✓ | ✓ | | | | | | | |
+| Settings | ✓ | | | | | | | | |
+| Create Claim | | | | ✓ | | | | | |
+| Edit Claim (pre-lock) | | | | ✓ | | | | | |
+| View Claims | ✓ | ✓ | ✓ | Own | Assigned | | ✓ | | |
+| Assign Driver Route | | | ✓ | | | | | | |
+| Driver Mobile UI | | | | | ✓ | | | | |
+| Inward Battery | | | | | | ✓* | ✓ | | |
+| Diagnose Battery | | | | | | ✓ | | | |
+| Assign Replacement | | | | | | | ✓ | | |
+| Run Reports | ✓ | ✓ | ✓ | | | | | ✓ | ✓ |
+| Finance Report | ✓ | ✓ | | | | | | | |
+| CRM: View Pipeline | ✓ | ✓ | | Own | | | | ✓ | ✓ |
+| CRM: Manage Leads | ✓ | ✓ | | | | | | ✓ | |
+| CRM: Create Campaign | ✓ | | | | | | | ✓ | ✓ |
+| CRM: Send Campaign | ✓ | | | | | | | ✓ | |
+| CRM: Manage Schemes | ✓ | ✓ | | | | | | ✓ | |
+| CRM: View Dealer Sales Graph | ✓ | ✓ | ✓ | Own | | | | ✓ | ✓ |
+| CRM: Parent Scheme Config | ✓ | | | | | | | ✓ | |
 
 *Tester performs Inwarding in simplified deployments.
 
@@ -255,6 +265,46 @@ battery-management/
 │   │           ├── AuditClaimChanges.php
 │   │           └── AuditSecurityEvents.php
 │   │
+│   │   └── CRM/                          ← §13 — Customer Pipeline, Campaigns, Dealer Schemes
+│   │       ├── Controllers/
+│   │       │   ├── CustomerController.php   ← CRUD + segment membership
+│   │       │   ├── LeadController.php        ← Pipeline stage management
+│   │       │   ├── CampaignController.php    ← Create / dispatch / analytics
+│   │       │   ├── SchemeController.php      ← Parent-company scheme CRUD + dealer targets
+│   │       │   └── DealerSalesController.php ← Daily/monthly sales graph data
+│   │       ├── Services/
+│   │       │   ├── CrmServiceInterface.php
+│   │       │   ├── CustomerService.php       ← Upsert customer from handshake/claim events
+│   │       │   ├── LeadService.php           ← Pipeline state machine (§5.18)
+│   │       │   ├── CampaignService.php       ← Segment resolve, channel dispatch (§5.19)
+│   │       │   ├── SegmentService.php        ← JSON rule evaluator (§5.20)
+│   │       │   └── SchemeService.php         ← Scheme attainment calculator (§5.21)
+│   │       ├── Repositories/
+│   │       │   ├── CustomerRepository.php
+│   │       │   ├── LeadRepository.php
+│   │       │   ├── CampaignRepository.php
+│   │       │   └── SchemeRepository.php
+│   │       ├── Jobs/
+│   │       │   ├── DispatchCampaignBatchJob.php  ← Chunked fan-out; max 500 recipients/job
+│   │       │   └── DealerSalesRollupJob.php      ← Nightly aggregate → crm_dealer_sales_daily
+│   │       ├── Events/
+│   │       │   ├── LeadStageChanged.php
+│   │       │   ├── CampaignDispatched.php
+│   │       │   └── SchemeTargetHit.php
+│   │       ├── Listeners/
+│   │       │   ├── AutoEnrichCustomerOnHandshake.php  ← Fires on HandshakeCaptured
+│   │       │   └── AuditCampaignActions.php
+│   │       └── Routes/web.php, api.php
+│   │
+│   ├── Tracking/                              ← Public Repair Status Tracking (§14)
+│   │   ├── Controllers/
+│   │   │   └── TrackingController.php         ← resolve(), lookup() — no auth
+│   │   ├── Services/
+│   │   │   └── TrackingService.php            ← issue(), getOrCreateToken() (§5.22)
+│   │   ├── Repositories/
+│   │   │   └── TrackingRepository.php
+│   │   └── Routes/public.php                  ← /track/{token}, /track/lookup
+│   │
 │   └── Shared/
 │       ├── Auth/
 │       │   ├── Middleware/
@@ -345,22 +395,35 @@ battery-management/
 ```sql
 -- ============================================================
 -- TABLE 1: users
+-- AUTHORITATIVE SaaS schema — tenant_id on every row.
+-- Role is deliberately kept as legacy_role for migration compatibility (§auth strategy below).
+-- All authorization checks MUST use user_roles → roles → role_permissions.
 -- ============================================================
 CREATE TABLE users (
     id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED  NOT NULL,
     name          VARCHAR(255)  NOT NULL,
-    email         VARCHAR(255)  NOT NULL UNIQUE,
+    email         VARCHAR(255)  NOT NULL,
     phone         VARCHAR(20)   NULL,
-    role          ENUM(
+    legacy_role   ENUM(
                     'ADMIN','DEALER','DRIVER','TESTER',
                     'INV_MANAGER','DISPATCH_MANAGER','SUPER_MANAGER'
-                  ) NOT NULL,
+                  ) NULL COMMENT 'DEPRECATED — migration compatibility only. Use user_roles table.',
     is_active     TINYINT(1)    NOT NULL DEFAULT 1,
+    deleted_at    TIMESTAMP     NULL     COMMENT 'Soft-delete only — never hard-delete; preserves audit trail',
+    deleted_by    INT UNSIGNED  NULL,
+    version_no    INT UNSIGNED  NOT NULL DEFAULT 1 COMMENT 'Optimistic lock: client must match on PUT',
     created_at    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP
                                           ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_role    (role),
-    INDEX idx_active  (is_active)
+    FOREIGN KEY (tenant_id)  REFERENCES tenants(id),
+    FOREIGN KEY (deleted_by) REFERENCES users(id) ON DELETE SET NULL,
+    -- Expression index (§11.21): soft-deleted rows step out of the unique envelope.
+    -- When deleted_at IS NULL (live row) → key includes literal 1 → conflicts with other live rows.
+    -- When deleted_at IS NOT NULL (deleted) → key includes unique id   → no conflict with new rows.
+    UNIQUE KEY uq_tenant_email_live (tenant_id, email, (IF(deleted_at IS NULL, 1, id))),
+    INDEX idx_tenant_active (tenant_id, is_active),
+    INDEX idx_tenant_role   (tenant_id, legacy_role)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -405,26 +468,39 @@ INSERT INTO settings (`key`, `value`, description) VALUES
 
 -- ============================================================
 -- TABLE 4: batteries
+-- AUTHORITATIVE SaaS schema — tenant_id on every row.
+-- root_battery_id / lineage_depth / replacement_count: Phase 1 lineage additions.
 -- ============================================================
 CREATE TABLE batteries (
-    id                INT UNSIGNED   AUTO_INCREMENT PRIMARY KEY,
-    serial_number     VARCHAR(15)    NOT NULL UNIQUE,    -- 14-15 chars, A-Z0-9
-    is_in_tally       TINYINT(1)     NOT NULL DEFAULT 0, -- Populated on Tally import
-    mfg_year          SMALLINT UNSIGNED NULL,            -- Decoded from serial
-    mfg_week          TINYINT UNSIGNED  NULL,            -- Decoded from serial (1-53)
-    model             VARCHAR(100)   NULL,
+    id                BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id         BIGINT UNSIGNED  NOT NULL,
+    serial_number     VARCHAR(15)      NOT NULL,          -- 14-15 chars, A-Z0-9; unique per tenant
+    is_in_tally       TINYINT(1)       NOT NULL DEFAULT 0, -- Populated on Tally import
+    mfg_year          SMALLINT UNSIGNED NULL,             -- Decoded from serial
+    mfg_week          TINYINT UNSIGNED  NULL,             -- Decoded from serial (1-53)
+    model             VARCHAR(100)     NULL,
     status            ENUM(
                         'IN_STOCK','CLAIMED','IN_TRANSIT',
                         'AT_SERVICE','REPLACED','SCRAPPED'
                       ) NOT NULL DEFAULT 'IN_STOCK',
-    mother_battery_id INT UNSIGNED   NULL,               -- Linked-list: IMMEDIATE parent only (not root). Use recursive CTE (§5.4) to reach root.
-    created_at        TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at        TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                               ON UPDATE CURRENT_TIMESTAMP,
+    mother_battery_id BIGINT UNSIGNED  NULL,              -- Linked-list: IMMEDIATE parent (not root). Use CTE (§5.4).
+    root_battery_id   BIGINT UNSIGNED  NULL,              -- O(1) root lookup; NULL = this IS the root
+    lineage_depth     SMALLINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'Hop count from root (0 = original)',
+    replacement_count SMALLINT UNSIGNED NOT NULL DEFAULT 0 COMMENT 'How many times replaced',
+    deleted_at        TIMESTAMP        NULL,
+    created_at        TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                 ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id)         REFERENCES tenants(id),
     FOREIGN KEY (mother_battery_id) REFERENCES batteries(id) ON DELETE SET NULL,
-    INDEX idx_status      (status),
-    INDEX idx_mother      (mother_battery_id),
-    INDEX idx_mfg         (mfg_year, mfg_week)
+    FOREIGN KEY (root_battery_id)   REFERENCES batteries(id) ON DELETE SET NULL,
+    -- Expression index (§11.21): soft-deleted batteries release their serial for reuse.
+    UNIQUE KEY uq_tenant_serial_live (tenant_id, serial_number, (IF(deleted_at IS NULL, 1, id))),
+    INDEX idx_status        (status),
+    INDEX idx_mother        (mother_battery_id),
+    INDEX idx_root          (root_battery_id),
+    INDEX idx_mfg           (mfg_year, mfg_week),
+    INDEX idx_tally_status  (is_in_tally, status)          -- Tally UPSERT + Lemon report (§11.14)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -432,6 +508,7 @@ CREATE TABLE batteries (
 -- ============================================================
 CREATE TABLE tally_imports (
     id            INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED  NOT NULL,
     filename      VARCHAR(255)     NOT NULL,
     imported_by   INT UNSIGNED     NOT NULL,
     total_rows    INT UNSIGNED     NOT NULL DEFAULT 0,
@@ -441,16 +518,21 @@ CREATE TABLE tally_imports (
     upserted_rows INT UNSIGNED     NOT NULL DEFAULT 0,  -- existing serials refreshed (not CLAIMED)
     skipped_rows  INT UNSIGNED     NOT NULL DEFAULT 0,  -- CLAIMED/AT_SERVICE batteries left untouched
     imported_at   TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (imported_by) REFERENCES users(id)
+    FOREIGN KEY (tenant_id)   REFERENCES tenants(id),
+    FOREIGN KEY (imported_by) REFERENCES users(id),
+    INDEX idx_tenant_created  (tenant_id, imported_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
 -- TABLE 6: claims
+-- AUTHORITATIVE SaaS schema — tenant_id on every row.
+-- claim_number unique per tenant (not globally unique).
 -- ============================================================
 CREATE TABLE claims (
-    id                 INT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
-    claim_number       VARCHAR(20)   NOT NULL UNIQUE,       -- e.g. CLM-2026-00001
-    battery_id         INT UNSIGNED  NOT NULL,
+    id                 BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    tenant_id          BIGINT UNSIGNED NOT NULL,
+    claim_number       VARCHAR(30)   NOT NULL,              -- e.g. ACME-CLM-2026-00001
+    battery_id         BIGINT UNSIGNED NOT NULL,
     dealer_id          INT UNSIGNED  NOT NULL,
     is_orange_tick     TINYINT(1)    NOT NULL DEFAULT 0,     -- Serial not in Tally
     orange_tick_photo  VARCHAR(500)  NULL,                   -- Relative path in storage
@@ -471,12 +553,14 @@ CREATE TABLE claims (
     created_at         TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at         TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP
                                                ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id)  REFERENCES tenants(id),
     FOREIGN KEY (battery_id) REFERENCES batteries(id),
     FOREIGN KEY (dealer_id)  REFERENCES users(id),
-    INDEX idx_dealer        (dealer_id),
-    INDEX idx_status        (status),
-    INDEX idx_battery       (battery_id),
-    INDEX idx_dealer_status (dealer_id, status)  -- composite: Dealer “My Claims” dashboard
+    UNIQUE KEY uq_tenant_claim_no (tenant_id, claim_number), -- scoped: two tenants CAN share same number
+    INDEX idx_tenant_dealer  (tenant_id, dealer_id),
+    INDEX idx_tenant_status  (tenant_id, status),
+    INDEX idx_battery        (battery_id),
+    INDEX idx_dealer_status  (dealer_id, status)  -- composite: Dealer "My Claims" dashboard
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -484,15 +568,17 @@ CREATE TABLE claims (
 -- ============================================================
 CREATE TABLE driver_routes (
     id           INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    tenant_id    BIGINT UNSIGNED NOT NULL,
     driver_id    INT UNSIGNED NOT NULL,
     route_date   DATE         NOT NULL,
     status       ENUM('PLANNED','ACTIVE','COMPLETED') NOT NULL DEFAULT 'PLANNED',
     created_by   INT UNSIGNED NOT NULL,
     created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id)  REFERENCES tenants(id),
     FOREIGN KEY (driver_id)  REFERENCES users(id),
     FOREIGN KEY (created_by) REFERENCES users(id),
-    UNIQUE KEY uq_driver_date (driver_id, route_date),
-    INDEX idx_date (route_date)
+    UNIQUE KEY uq_tenant_driver_date (tenant_id, driver_id, route_date),
+    INDEX idx_tenant_date (tenant_id, route_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -500,8 +586,9 @@ CREATE TABLE driver_routes (
 -- ============================================================
 CREATE TABLE driver_tasks (
     id               INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    tenant_id        BIGINT UNSIGNED NOT NULL,
     route_id         INT UNSIGNED NOT NULL,
-    claim_id         INT UNSIGNED NOT NULL,
+    claim_id         BIGINT UNSIGNED NOT NULL,
     task_type        ENUM(
                        'DELIVERY_NEW',         -- New battery to dealer
                        'DELIVERY_REPLACEMENT', -- Replacement unit to dealer
@@ -517,12 +604,13 @@ CREATE TABLE driver_tasks (
                       ) NULL,                          -- Structured vocabulary; prevents free-text drift
     skip_reason_note  TEXT NULL,                       -- Free text; required only when code='OTHER'
     completed_at      TIMESTAMP NULL,
-    FOREIGN KEY (route_id) REFERENCES driver_routes(id) ON DELETE CASCADE,
-    FOREIGN KEY (claim_id) REFERENCES claims(id),
-    INDEX idx_route        (route_id),
-    INDEX idx_claim        (claim_id),
-    INDEX idx_status       (status),
-    INDEX idx_route_status (route_id, status)          -- composite: Driver “Today’s Tasks” view
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY (route_id)  REFERENCES driver_routes(id) ON DELETE CASCADE,
+    FOREIGN KEY (claim_id)  REFERENCES claims(id),
+    INDEX idx_tenant_route  (tenant_id, route_id),
+    INDEX idx_claim         (claim_id),
+    INDEX idx_status        (status),
+    INDEX idx_route_status  (route_id, status)          -- composite: Driver "Today's Tasks" view
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -532,9 +620,10 @@ CREATE TABLE driver_tasks (
 -- Morning Load + Pickups - Deliveries = End-of-Day Physical
 CREATE TABLE driver_stock (
     id            INT UNSIGNED   AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED NOT NULL,
     driver_id     INT UNSIGNED   NOT NULL,
     stock_date    DATE           NOT NULL,
-    battery_id    INT UNSIGNED   NOT NULL,
+    battery_id    BIGINT UNSIGNED NOT NULL,
     action        ENUM(
                     'MORNING_LOAD',  -- Batteries loaded at start of day
                     'DELIVERED',     -- Battery given to dealer
@@ -543,26 +632,39 @@ CREATE TABLE driver_stock (
                   ) NOT NULL,
     task_id       INT UNSIGNED   NULL,       -- FK to driver_tasks if applicable
     created_at    TIMESTAMP      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id)  REFERENCES tenants(id),
     FOREIGN KEY (driver_id)  REFERENCES users(id),
     FOREIGN KEY (battery_id) REFERENCES batteries(id),
     FOREIGN KEY (task_id)    REFERENCES driver_tasks(id) ON DELETE SET NULL,
-    INDEX idx_driver_date (driver_id, stock_date),
-    INDEX idx_battery     (battery_id)
+    INDEX idx_tenant_driver_date (tenant_id, driver_id, stock_date),
+    INDEX idx_battery            (battery_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
 -- TABLE 10: driver_handshakes
+-- sig_hash prevents recycling old signature files (§11.9).
+-- client_timestamp + geo columns support forensic dispute resolution (§11.15).
 -- ============================================================
 CREATE TABLE driver_handshakes (
     id                INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    tenant_id         BIGINT UNSIGNED NOT NULL,
     route_id          INT UNSIGNED NOT NULL,
+    driver_id         INT UNSIGNED NOT NULL,
     dealer_id         INT UNSIGNED NOT NULL,
     batch_photo       VARCHAR(500) NOT NULL,   -- Photo of all units together
     dealer_signature  VARCHAR(500) NOT NULL,   -- Canvas PNG path
+    sig_hash          CHAR(64)     NOT NULL,   -- SHA-256(signature file bytes); reject duplicates
+    client_timestamp  BIGINT       NULL,       -- JS Date.now()/1000; compared vs handshake_at (§11.15)
+    geo_lat           DECIMAL(10,8) NULL,      -- Driver GPS at time of handshake
+    geo_lng           DECIMAL(11,8) NULL,
     handshake_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
     FOREIGN KEY (route_id)  REFERENCES driver_routes(id),
+    FOREIGN KEY (driver_id) REFERENCES users(id),
     FOREIGN KEY (dealer_id) REFERENCES users(id),
-    INDEX idx_route (route_id)
+    UNIQUE KEY uq_sig_hash (sig_hash),         -- Prevent signature file reuse
+    INDEX idx_tenant_driver (tenant_id, driver_id, handshake_at),
+    INDEX idx_route         (route_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -570,18 +672,20 @@ CREATE TABLE driver_handshakes (
 -- ============================================================
 CREATE TABLE service_jobs (
     id              INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    claim_id        INT UNSIGNED NOT NULL,
+    tenant_id       BIGINT UNSIGNED NOT NULL,
+    claim_id        BIGINT UNSIGNED NOT NULL,
     inward_by       INT UNSIGNED NOT NULL,
     inward_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     assigned_tester INT UNSIGNED NULL,
     diagnosis       ENUM('PENDING','OK','REPLACE') NOT NULL DEFAULT 'PENDING',
     diagnosis_notes TEXT         NULL,
     diagnosed_at    TIMESTAMP    NULL,
+    FOREIGN KEY (tenant_id)       REFERENCES tenants(id),
     FOREIGN KEY (claim_id)        REFERENCES claims(id),
     FOREIGN KEY (inward_by)       REFERENCES users(id),
     FOREIGN KEY (assigned_tester) REFERENCES users(id) ON DELETE SET NULL,
-    INDEX idx_claim     (claim_id),
-    INDEX idx_diagnosis (diagnosis)
+    INDEX idx_tenant_diagnosis (tenant_id, diagnosis),
+    INDEX idx_claim            (claim_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -589,16 +693,19 @@ CREATE TABLE service_jobs (
 -- ============================================================
 CREATE TABLE replacements (
     id              INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    tenant_id       BIGINT UNSIGNED NOT NULL,
     service_job_id  INT UNSIGNED NOT NULL,
-    old_battery_id  INT UNSIGNED NOT NULL,
-    new_battery_id  INT UNSIGNED NOT NULL,
+    old_battery_id  BIGINT UNSIGNED NOT NULL,
+    new_battery_id  BIGINT UNSIGNED NOT NULL,
     assigned_by     INT UNSIGNED NOT NULL,
     replaced_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id)      REFERENCES tenants(id),
     FOREIGN KEY (service_job_id) REFERENCES service_jobs(id),
     FOREIGN KEY (old_battery_id) REFERENCES batteries(id),
     FOREIGN KEY (new_battery_id) REFERENCES batteries(id),
     FOREIGN KEY (assigned_by)    REFERENCES users(id),
-    UNIQUE KEY uq_new_battery (new_battery_id)    -- One replacement serial used once
+    UNIQUE KEY uq_new_battery            (new_battery_id),  -- One replacement serial used once
+    INDEX idx_tenant_service_job         (tenant_id, service_job_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -606,22 +713,24 @@ CREATE TABLE replacements (
 -- ============================================================
 CREATE TABLE delivery_incentives (
     id            INT UNSIGNED   AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED NOT NULL,
     driver_id     INT UNSIGNED   NOT NULL,
     task_id       INT UNSIGNED   NOT NULL UNIQUE,
-    claim_id      INT UNSIGNED   NOT NULL,
+    claim_id      BIGINT UNSIGNED NOT NULL,
     handshake_id  INT UNSIGNED   NOT NULL,             -- REQUIRED: incentive is forbidden without a physical handshake
     task_type     ENUM('DELIVERY_NEW','DELIVERY_REPLACEMENT') NOT NULL,  -- both task types earn incentive
     amount        DECIMAL(10,2)  NOT NULL,             -- copied from settings at time of delivery
     delivery_date DATE           NOT NULL,
     is_paid       TINYINT(1)     NOT NULL DEFAULT 0,
     paid_at       TIMESTAMP      NULL,
+    FOREIGN KEY (tenant_id)    REFERENCES tenants(id),
     FOREIGN KEY (driver_id)    REFERENCES users(id),
     FOREIGN KEY (task_id)      REFERENCES driver_tasks(id),
     FOREIGN KEY (claim_id)     REFERENCES claims(id),
     FOREIGN KEY (handshake_id) REFERENCES driver_handshakes(id),
-    INDEX idx_driver_month   (driver_id, delivery_date),
-    INDEX idx_paid           (is_paid),
-    INDEX idx_incentive_paid (driver_id, is_paid, delivery_date)   -- composite: monthly payout report
+    INDEX idx_tenant_driver      (tenant_id, driver_id, is_paid),
+    INDEX idx_driver_month       (driver_id, delivery_date),
+    INDEX idx_incentive_paid     (driver_id, is_paid, delivery_date)   -- composite: monthly payout report
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -643,6 +752,8 @@ CREATE TABLE tally_exports (
 -- ============================================================
 CREATE TABLE audit_logs (
     id           BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id    BIGINT UNSIGNED  NOT NULL,
+    request_id   CHAR(36)         NULL,      -- X-Request-ID; ties log entry to HTTP request
     user_id      INT UNSIGNED     NULL,
     action       VARCHAR(100)     NOT NULL,  -- e.g. 'claim.status_changed'
     entity_type  VARCHAR(50)      NOT NULL,  -- e.g. 'claims'
@@ -653,11 +764,12 @@ CREATE TABLE audit_logs (
     ip_address   VARCHAR(45)      NOT NULL,  -- IPv4 + IPv6
     user_agent   VARCHAR(500)     NULL,
     created_at   TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
-    INDEX idx_entity   (entity_type, entity_id),
-    INDEX idx_user     (user_id),
-    INDEX idx_created  (created_at),
-    INDEX idx_severity (severity)            -- Admins can filter HIGH/CRITICAL fraud alerts directly
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY (user_id)   REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_tenant_entity  (tenant_id, entity_type, entity_id),
+    INDEX idx_user           (user_id),
+    INDEX idx_created        (created_at),
+    INDEX idx_severity       (severity)      -- Admins can filter HIGH/CRITICAL fraud alerts directly
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -683,7 +795,7 @@ CREATE TABLE sessions (
 -- "how long did a claim remain in each status?" reports.
 CREATE TABLE claim_status_history (
     id          BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
-    claim_id    INT UNSIGNED     NOT NULL,
+    claim_id    BIGINT UNSIGNED  NOT NULL,
     from_status VARCHAR(30)      NOT NULL,
     to_status   VARCHAR(30)      NOT NULL,
     changed_by  INT UNSIGNED     NOT NULL,
@@ -709,16 +821,27 @@ INSERT INTO claim_sequences (prefix) VALUES ('CLM-2026-');
 -- ============================================================
 -- TABLE 19: login_attempts
 -- ============================================================
--- Tracks OTP verification attempts for rate-limiting (§5.9).
--- 5 failures in a 10-minute window → AuthException thrown + CRITICAL audit log.
+-- Multi-dimensional rate-limiting: per identifier, per IP, per tenant, and globally.
+-- attempt_type distinguishes OTP send abuse from verify abuse from token refresh abuse.
 CREATE TABLE login_attempts (
-    id           INT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
-    user_id      INT UNSIGNED  NOT NULL,
-    attempted_at TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    ip_address   VARCHAR(45)   NOT NULL,
-    success      TINYINT(1)    NOT NULL DEFAULT 0,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-    INDEX idx_user_window (user_id, attempted_at)
+    id                 INT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id          BIGINT UNSIGNED NULL,              -- NULL during public pre-auth flows
+    user_id            INT UNSIGNED  NULL,                -- NULL until identity confirmed
+    identifier         VARCHAR(255)  NOT NULL,            -- email or phone (pre-auth key)
+    ip_address         VARCHAR(45)   NOT NULL,
+    device_fingerprint VARCHAR(128)  NULL,                -- browser/app fingerprint hash
+    attempt_type       ENUM(
+                         'SEND_OTP',
+                         'VERIFY_OTP',
+                         'REFRESH_TOKEN'
+                       ) NOT NULL DEFAULT 'VERIFY_OTP',
+    success            TINYINT(1)    NOT NULL DEFAULT 0,
+    attempted_at       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id)   REFERENCES users(id)   ON DELETE CASCADE,
+    INDEX idx_identifier_window (identifier, attempted_at),  -- per-email lockout
+    INDEX idx_ip_window         (ip_address, attempted_at),  -- per-IP lockout
+    INDEX idx_tenant_window     (tenant_id, attempted_at)    -- per-tenant burst detection
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -728,6 +851,7 @@ CREATE TABLE login_attempts (
 -- bin/process-email-queue.php (cron every minute) drains this table.
 CREATE TABLE email_queue (
     id           INT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id    BIGINT UNSIGNED NOT NULL,
     recipient    VARCHAR(255)  NOT NULL,
     subject      VARCHAR(255)  NOT NULL,
     body         TEXT          NOT NULL,
@@ -736,7 +860,8 @@ CREATE TABLE email_queue (
     last_attempt TIMESTAMP     NULL,
     sent_at      TIMESTAMP     NULL,
     created_at   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_pending (status, attempts)
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    INDEX idx_tenant_pending (tenant_id, status, attempts)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ============================================================
@@ -746,6 +871,7 @@ CREATE TABLE email_queue (
 -- Corrected equation: expected_eod = morning_load + picked_up - delivered - inwarded (§5.5)
 CREATE TABLE driver_eod_audits (
     id            INT UNSIGNED       AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED    NOT NULL,
     driver_id     INT UNSIGNED       NOT NULL,
     audit_date    DATE               NOT NULL,
     morning_load  SMALLINT UNSIGNED  NOT NULL DEFAULT 0,
@@ -758,12 +884,13 @@ CREATE TABLE driver_eod_audits (
     is_balanced   TINYINT(1)         NOT NULL DEFAULT 0,
     notes         TEXT               NULL,
     created_at    TIMESTAMP          NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
     FOREIGN KEY (driver_id) REFERENCES users(id),
-    UNIQUE KEY uq_driver_date (driver_id, audit_date)
+    UNIQUE KEY uq_tenant_driver_date (tenant_id, driver_id, audit_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
-### SaaS Tables (Phase 1 additions — TABLE 22–30)
+### SaaS Tables (Phase 1 additions — TABLE 22–38)
 
 ```sql
 -- TABLE 22: tenants
@@ -835,21 +962,29 @@ CREATE TABLE user_roles (
 
 -- TABLE 28: files  (StorageDriver abstraction — all uploads tracked here)
 CREATE TABLE files (
-    id            BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
-    tenant_id     BIGINT UNSIGNED  NOT NULL,
-    uploaded_by   INT UNSIGNED     NOT NULL,
-    entity_type   VARCHAR(60)      NOT NULL,                 -- "claim", "handshake", "tally"
-    entity_id     BIGINT UNSIGNED  NOT NULL,
-    storage_driver VARCHAR(20)     NOT NULL DEFAULT 'local',  -- 'local', 's3', 'r2'
-    disk_path     VARCHAR(512)     NOT NULL,                  -- relative key on that driver
-    mime_type     VARCHAR(100)     NOT NULL,
-    file_size_kb  INT UNSIGNED     NOT NULL DEFAULT 0,
-    original_name VARCHAR(255)     NOT NULL,
-    is_deleted    TINYINT(1)       NOT NULL DEFAULT 0,        -- soft-delete; physical purge by cron
-    created_at    TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    id                 BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id          BIGINT UNSIGNED  NOT NULL,
+    uploaded_by        INT UNSIGNED     NOT NULL,
+    entity_type        VARCHAR(60)      NOT NULL,            -- "claim", "handshake", "tally"
+    entity_id          BIGINT UNSIGNED  NOT NULL,
+    storage_driver     VARCHAR(20)      NOT NULL DEFAULT 'local', -- 'local', 's3', 'r2'
+    disk_path          VARCHAR(512)     NOT NULL,            -- relative key on that driver
+    mime_type          VARCHAR(100)     NOT NULL,
+    file_size_kb       INT UNSIGNED     NOT NULL DEFAULT 0,
+    original_name      VARCHAR(255)     NOT NULL,
+    checksum_sha256    CHAR(64)         NULL,                -- SHA-256 of stored bytes; verify on serve
+    virus_scan_status  ENUM('PENDING','CLEAN','INFECTED','SKIPPED') NOT NULL DEFAULT 'PENDING',
+    virus_scanned_at   TIMESTAMP        NULL,
+    quarantined_at     TIMESTAMP        NULL,                -- Set if virus_scan_status = INFECTED
+    encryption_key_id  VARCHAR(128)     NULL,                -- KMS key reference (Phase 3)
+    deleted_at         TIMESTAMP        NULL,                -- Soft-delete
+    deleted_by         INT UNSIGNED     NULL,
+    created_at         TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (tenant_id)   REFERENCES tenants(id),
     FOREIGN KEY (uploaded_by) REFERENCES users(id),
-    INDEX idx_entity (tenant_id, entity_type, entity_id)
+    FOREIGN KEY (deleted_by)  REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_entity      (tenant_id, entity_type, entity_id),
+    INDEX idx_scan_status (virus_scan_status, virus_scanned_at)  -- worker processes PENDING queue
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- TABLE 29: tenant_settings  (per-tenant overrides; replaces global settings for SaaS)
@@ -872,6 +1007,176 @@ CREATE TABLE tenant_sequences (
     reset_cycle ENUM('never','daily','monthly','yearly') NOT NULL DEFAULT 'never',
     PRIMARY KEY (tenant_id, seq_name),
     FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 31: auth_refresh_tokens
+-- Stores opaque refresh-token stubs (hashed). Access tokens are short-lived
+-- (15 min JWT); refresh tokens survive 30 days and are invalidated on use
+-- (rotation) or explicit logout. device_id links to auth_devices (TABLE 35).
+-- ============================================================
+CREATE TABLE auth_refresh_tokens (
+    id            BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED  NOT NULL,
+    user_id       INT UNSIGNED     NOT NULL,
+    token_hash    CHAR(64)         NOT NULL,   -- SHA-256(opaque token); plaintext never stored
+    device_id     VARCHAR(128)     NULL,        -- FK to auth_devices.device_id (logical, no hard FK)
+    device_name   VARCHAR(255)     NULL,
+    ip_address    VARCHAR(45)      NOT NULL,
+    user_agent    VARCHAR(500)     NULL,
+    expires_at    TIMESTAMP        NOT NULL,
+    revoked_at    TIMESTAMP        NULL,        -- Set on logout / rotation invalidation
+    last_used_at  TIMESTAMP        NULL,
+    created_at    TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY (user_id)   REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_token_hash  (token_hash),
+    INDEX idx_user_active     (tenant_id, user_id, revoked_at, expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 32: handshake_tasks  (pivot: closes handshake ↔ task fraud gap §11.9)
+-- IncentiveService MUST JOIN through this table to confirm which specific
+-- task was covered by a given handshake. Without this pivot any handshake_id
+-- FK on delivery_incentives is not fully provable.
+-- ============================================================
+CREATE TABLE handshake_tasks (
+    handshake_id  INT UNSIGNED  NOT NULL,
+    task_id       INT UNSIGNED  NOT NULL,
+    PRIMARY KEY (handshake_id, task_id),
+    UNIQUE KEY uq_task_once (task_id),          -- one task in exactly one handshake
+    FOREIGN KEY (handshake_id) REFERENCES driver_handshakes(id) ON DELETE CASCADE,
+    FOREIGN KEY (task_id)      REFERENCES driver_tasks(id)      ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 33: outbox_events  (transactional-outbox pattern for EventBus)
+-- EventBus::dispatch() writes to this table INSIDE the business transaction.
+-- A separate Supervisor worker polls PENDING rows and publishes to Redis/queue.
+-- Guarantees "at-least-once" delivery without dual-write risk.
+-- ============================================================
+CREATE TABLE outbox_events (
+    id              BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id       BIGINT UNSIGNED  NOT NULL,
+    event_uuid      CHAR(36)         NOT NULL DEFAULT (UUID()),  -- guaranteed globally unique; used for consumer dedupe
+    event_name      VARCHAR(100)     NOT NULL,   -- e.g. "claim.submitted"
+    aggregate_type  VARCHAR(50)      NOT NULL,   -- e.g. "claims"
+    aggregate_id    BIGINT UNSIGNED  NOT NULL,
+    payload         JSON             NOT NULL,
+    status          ENUM('PENDING','PUBLISHED','FAILED') NOT NULL DEFAULT 'PENDING',
+    available_at    TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    published_at    TIMESTAMP        NULL,
+    created_at      TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    UNIQUE KEY uq_event_uuid  (event_uuid),      -- prevents accidental duplicate dispatch
+    INDEX idx_publish         (status, available_at)  -- worker SELECT … WHERE status='PENDING'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 36: processed_events  (consumer-side idempotency / dedupe)
+-- Before processing an outbox event, each consumer checks this table.
+-- If (event_uuid, consumer_name) already exists → skip (already processed).
+-- Insert atomically AFTER successful processing to mark completion.
+-- Guarantees exactly-once processing per consumer despite at-least-once delivery.
+-- ============================================================
+CREATE TABLE processed_events (
+    id            BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    event_uuid    CHAR(36)         NOT NULL,
+    consumer_name VARCHAR(100)     NOT NULL,   -- e.g. "IncentiveListener", "NotificationWorker"
+    processed_at  TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_event_consumer (event_uuid, consumer_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 37: tenant_usage_daily  (usage metering — one row per tenant per day)
+-- Incremented by domain event listeners (claim.submitted, user.logged_in, file.uploaded).
+-- Plan quota checks compare against this table; billing aggregates from it.
+-- ============================================================
+CREATE TABLE tenant_usage_daily (
+    id             BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id      BIGINT UNSIGNED  NOT NULL,
+    usage_date     DATE             NOT NULL,
+    claims_created INT UNSIGNED     NOT NULL DEFAULT 0,
+    active_users   SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    storage_bytes  BIGINT UNSIGNED  NOT NULL DEFAULT 0,
+    api_calls      INT UNSIGNED     NOT NULL DEFAULT 0,
+    report_exports SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_tenant_day (tenant_id, usage_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 38: tenant_usage_monthly  (pre-aggregated monthly rollup for billing)
+-- Populated nightly by a cron job that SUMs the daily rows for the closing month.
+-- ============================================================
+CREATE TABLE tenant_usage_monthly (
+    id              BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id       BIGINT UNSIGNED  NOT NULL,
+    usage_month     CHAR(7)          NOT NULL,  -- "YYYY-MM"
+    claims_created  INT UNSIGNED     NOT NULL DEFAULT 0,
+    peak_active_users SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    total_storage_bytes BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    api_calls       INT UNSIGNED     NOT NULL DEFAULT 0,
+    report_exports  SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    plan_limit_hits INT UNSIGNED     NOT NULL DEFAULT 0,  -- times PlanGuard returned 429
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_tenant_month (tenant_id, usage_month)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 34: api_idempotency_keys
+-- Stores the response for critical POST endpoints for 24 hours.
+-- Middleware checks this before executing handlers; re-plays cached response
+-- on replay without re-running business logic. Prevents duplicate claims,
+-- duplicate incentives, duplicate handshakes (§5.16).
+--
+-- IN-FLIGHT LOCKING (§11.17 — race condition fix):
+--   Middleware first does a single atomic INSERT with status='PROCESSING'.
+--   Any concurrent duplicate request hits the UNIQUE KEY and receives 409 immediately.
+--   On handler completion, UPDATE status='COMPLETE', set response_code + response_body.
+--
+-- CONFLICT POLICY (enforced by IdempotencyMiddleware):
+--   • Same key + SAME request_hash   → replay cached response (200/201 as stored)
+--   • Same key + DIFFERENT hash      → reject 409 Conflict ("idempotency_key_mismatch")
+--
+-- Canonical hash: SHA-256( strtoupper(method) . normalised_route . stable_json_encode(body) . tenant_id . user_id )
+--   - stable_json_encode = keys alphabetically sorted, no whitespace
+--   - normalised_route   = path without query string, lowercase
+-- ============================================================
+CREATE TABLE api_idempotency_keys (
+    id                BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id         BIGINT UNSIGNED  NOT NULL,
+    user_id           INT UNSIGNED     NOT NULL,
+    idempotency_key   VARCHAR(128)     NOT NULL,   -- UUID v4 sent by client
+    request_hash      CHAR(64)         NOT NULL,   -- SHA-256(method+path+body)
+    status            ENUM('PROCESSING','COMPLETE') NOT NULL DEFAULT 'PROCESSING', -- in-flight lock (§11.17)
+    response_code     SMALLINT         NULL,       -- NULL while status='PROCESSING'
+    response_body     JSON             NULL,       -- NULL while status='PROCESSING'
+    expires_at        TIMESTAMP        NOT NULL,   -- NOW() + 24h
+    created_at        TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY (user_id)   REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_key (tenant_id, user_id, idempotency_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 35: auth_devices
+-- Tracks registered mobile/PWA devices per user. Enables per-device session
+-- revocation, push notifications, and offline sync conflict detection (§12.5).
+-- ============================================================
+CREATE TABLE auth_devices (
+    id            BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED  NOT NULL,
+    user_id       INT UNSIGNED     NOT NULL,
+    device_id     VARCHAR(128)     NOT NULL,    -- app-generated UUID, stable across app re-installs
+    platform      VARCHAR(50)      NOT NULL,    -- "android", "ios", "pwa"
+    app_version   VARCHAR(50)      NULL,
+    push_token    VARCHAR(255)     NULL,        -- FCM/APNS token for push notifications
+    last_seen_at  TIMESTAMP        NULL,
+    created_at    TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY (user_id)   REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_user_device (tenant_id, user_id, device_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
@@ -897,10 +1202,10 @@ ALTER TABLE claims
 | 4 | `claims` | `(tenant_id, status)`, `(tenant_id, dealer_id)` |
 | 5 | `driver_routes` | `(tenant_id, driver_id, route_date)` |
 | 6 | `driver_tasks` | `(tenant_id, route_id, status)` |
-| 7 | `driver_stock` | `(tenant_id, driver_id, audit_date)` |
-| 8 | `driver_handshakes` | `(tenant_id, driver_id, created_at)` |
-| 9 | `service_jobs` | `(tenant_id, status)` |
-| 10 | `replacements` | `(tenant_id, claim_id)` |
+| 7 | `driver_stock` | `(tenant_id, driver_id, stock_date)` |
+| 8 | `driver_handshakes` | `(tenant_id, driver_id, handshake_at)` |
+| 9 | `service_jobs` | `(tenant_id, diagnosis)` |
+| 10 | `replacements` | `(tenant_id, service_job_id)` |
 | 11 | `delivery_incentives` | `(tenant_id, driver_id, is_paid)` |
 | 12 | `tally_imports` | `(tenant_id, created_at)` |
 | 13 | `tally_exports` | `(tenant_id, created_at)` |
@@ -922,6 +1227,376 @@ ALTER TABLE batteries
   ADD UNIQUE KEY uq_tenant_serial (tenant_id, serial_number);
 -- NOTE: mother_battery_id (TABLE 4) retains the direct-parent FK (linked list).
 --       root_battery_id enables O(1) root lookup without walking the chain (§5.2 lineage CTE).
+```
+
+---
+
+### CRM Tables (Phase 2 additions — TABLE 39–50)
+
+> All CRM tables carry `tenant_id` and are multi-tenant-safe.  
+> `crm_customers` is the canonical customer record, auto-enriched from handshake/claim events.  
+> Channel opt-out is enforced in `crm_opt_outs` — checked before every campaign dispatch.
+
+```sql
+-- ============================================================
+-- TABLE 39: crm_customers
+-- Canonical, deduplicated customer profiles. One row per real-world
+-- end customer. Auto-upserted when a HandshakeCaptured event fires
+-- (§5.19). Dealer staff can also add customers manually.
+-- ============================================================
+CREATE TABLE crm_customers (
+    id            BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED  NOT NULL,
+    dealer_id     INT UNSIGNED     NOT NULL              COMMENT 'FK users.id WHERE legacy_role=DEALER',
+    name          VARCHAR(255)     NOT NULL,
+    phone         VARCHAR(20)      NOT NULL,
+    email         VARCHAR(255)     NULL,
+    address       TEXT             NULL,
+    city          VARCHAR(100)     NULL,
+    state         VARCHAR(100)     NULL,
+    pincode       VARCHAR(10)      NULL,
+    source        ENUM('HANDSHAKE','MANUAL','IMPORT','API') NOT NULL DEFAULT 'HANDSHAKE',
+    lifecycle_stage ENUM('LEAD','PROSPECT','ACTIVE','REPEAT','CHURNED') NOT NULL DEFAULT 'LEAD',
+    total_batteries_bought SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    last_purchase_at TIMESTAMP    NULL,
+    notes         TEXT             NULL,
+    deleted_at    TIMESTAMP        NULL,
+    created_at    TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id)  REFERENCES tenants(id),
+    FOREIGN KEY (dealer_id)  REFERENCES users(id),
+    UNIQUE KEY uq_tenant_phone_live (tenant_id, phone, (IF(deleted_at IS NULL, 1, id))),
+    INDEX idx_tenant_dealer    (tenant_id, dealer_id),
+    INDEX idx_tenant_lifecycle (tenant_id, lifecycle_stage),
+    INDEX idx_tenant_city      (tenant_id, city)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 40: crm_leads
+-- Pipeline opportunities tracked per customer. A customer may have
+-- multiple active leads (e.g., one for each new battery model enquiry).
+-- Lifecycle: NEW → CONTACTED → QUALIFIED → PROPOSAL → WON | LOST
+-- ============================================================
+CREATE TABLE crm_leads (
+    id            BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED  NOT NULL,
+    customer_id   BIGINT UNSIGNED  NOT NULL,
+    assigned_to   INT UNSIGNED     NULL                  COMMENT 'FK users.id — sales rep / dealer',
+    title         VARCHAR(255)     NOT NULL              COMMENT 'Short description e.g. "2Ah AGM Replacement"',
+    stage         ENUM('NEW','CONTACTED','QUALIFIED','PROPOSAL','WON','LOST') NOT NULL DEFAULT 'NEW',
+    expected_value DECIMAL(10,2)   NULL                  COMMENT 'INR estimated deal value',
+    expected_close_date DATE       NULL,
+    lost_reason   VARCHAR(255)     NULL,
+    source        VARCHAR(100)     NULL                  COMMENT 'walk-in, whatsapp, campaign, referral…',
+    follow_up_at  TIMESTAMP        NULL,
+    closed_at     TIMESTAMP        NULL,
+    created_at    TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id)   REFERENCES tenants(id),
+    FOREIGN KEY (customer_id) REFERENCES crm_customers(id),
+    FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_tenant_stage     (tenant_id, stage),
+    INDEX idx_tenant_assigned  (tenant_id, assigned_to),
+    INDEX idx_follow_up        (tenant_id, follow_up_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 41: crm_lead_activities
+-- Append-only timeline log per lead: calls, WhatsApp messages,
+-- site visits, internal notes.
+-- ============================================================
+CREATE TABLE crm_lead_activities (
+    id            BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED  NOT NULL,
+    lead_id       BIGINT UNSIGNED  NOT NULL,
+    user_id       INT UNSIGNED     NOT NULL              COMMENT 'Who logged the activity',
+    activity_type ENUM('NOTE','CALL','EMAIL','WHATSAPP','VISIT','STAGE_CHANGE','FOLLOW_UP') NOT NULL,
+    body          TEXT             NULL,
+    old_stage     VARCHAR(50)      NULL,                 -- populated on STAGE_CHANGE
+    new_stage     VARCHAR(50)      NULL,
+    created_at    TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY (lead_id)   REFERENCES crm_leads(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id)   REFERENCES users(id),
+    INDEX idx_lead_created (lead_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 42: crm_message_templates
+-- Reusable message templates for email and WhatsApp campaigns.
+-- Placeholders: {{customer_name}}, {{dealer_name}}, {{offer_details}},
+--               {{scheme_name}}, {{valid_until}}, {{cta_link}}
+-- ============================================================
+CREATE TABLE crm_message_templates (
+    id            BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED  NOT NULL,
+    name          VARCHAR(255)     NOT NULL,
+    channel       ENUM('EMAIL','WHATSAPP','BOTH') NOT NULL,
+    subject       VARCHAR(500)     NULL                  COMMENT 'Email subject line; NULL for WA',
+    body_html     LONGTEXT         NULL                  COMMENT 'HTML content for email',
+    body_text     TEXT             NOT NULL              COMMENT 'Plain-text / WA message body',
+    -- SECURITY: body fields are stored raw; rendered via twig-sandbox with only
+    -- allow-listed variables. Never eval() or extract() template variables.
+    is_active     TINYINT(1)       NOT NULL DEFAULT 1,
+    created_by    INT UNSIGNED     NULL,
+    created_at    TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id)  REFERENCES tenants(id),
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_tenant_channel (tenant_id, channel, is_active)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 43: crm_segments
+-- Saved audience segments defined as JSON rule sets.
+-- SegmentService resolves a segment to a list of crm_customer IDs
+-- at dispatch time — always uses fresh DB snapshot (no cached list).
+-- Rule schema: { "operator": "AND", "conditions": [
+--   { "field": "lifecycle_stage", "op": "eq",  "value": "ACTIVE" },
+--   { "field": "city",            "op": "eq",  "value": "Mumbai" },
+--   { "field": "total_batteries_bought", "op": "gte", "value": 2 }
+-- ]}
+-- Allowed fields whitelist enforced in SegmentService::resolveCondition()
+-- to prevent SQL injection through field names.
+-- ============================================================
+CREATE TABLE crm_segments (
+    id            BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED  NOT NULL,
+    name          VARCHAR(255)     NOT NULL,
+    description   TEXT             NULL,
+    rules         JSON             NOT NULL,
+    estimated_count INT UNSIGNED   NULL                  COMMENT 'Cached from last resolve; informational only',
+    last_resolved_at TIMESTAMP     NULL,
+    created_by    INT UNSIGNED     NULL,
+    created_at    TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id)  REFERENCES tenants(id),
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_tenant (tenant_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 44: crm_campaigns
+-- One campaign = one outbound communication blast (email or WA or both).
+-- A campaign is linked to a segment OR an explicit customer list.
+-- Status: DRAFT → SCHEDULED → DISPATCHING → COMPLETED | CANCELLED
+-- ============================================================
+CREATE TABLE crm_campaigns (
+    id            BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED  NOT NULL,
+    name          VARCHAR(255)     NOT NULL,
+    channel       ENUM('EMAIL','WHATSAPP','BOTH') NOT NULL,
+    template_id   BIGINT UNSIGNED  NOT NULL,
+    segment_id    BIGINT UNSIGNED  NULL                  COMMENT 'NULL if explicit recipient list',
+    scheme_id     BIGINT UNSIGNED  NULL                  COMMENT 'FK crm_schemes — attach offer',
+    status        ENUM('DRAFT','SCHEDULED','DISPATCHING','COMPLETED','CANCELLED') NOT NULL DEFAULT 'DRAFT',
+    scheduled_at  TIMESTAMP        NULL                  COMMENT 'NULL = send immediately on dispatch',
+    dispatched_at TIMESTAMP        NULL,
+    completed_at  TIMESTAMP        NULL,
+    total_recipients INT UNSIGNED  NOT NULL DEFAULT 0,
+    sent_count    INT UNSIGNED     NOT NULL DEFAULT 0,
+    delivered_count INT UNSIGNED   NOT NULL DEFAULT 0,
+    opened_count  INT UNSIGNED     NOT NULL DEFAULT 0,
+    clicked_count INT UNSIGNED     NOT NULL DEFAULT 0,
+    failed_count  INT UNSIGNED     NOT NULL DEFAULT 0,
+    created_by    INT UNSIGNED     NULL,
+    created_at    TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id)    REFERENCES tenants(id),
+    FOREIGN KEY (template_id)  REFERENCES crm_message_templates(id),
+    FOREIGN KEY (segment_id)   REFERENCES crm_segments(id) ON DELETE SET NULL,
+    FOREIGN KEY (created_by)   REFERENCES users(id) ON DELETE SET NULL,
+    INDEX idx_tenant_status    (tenant_id, status),
+    INDEX idx_tenant_scheduled (tenant_id, scheduled_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 45: crm_campaign_recipients
+-- One row per customer per campaign. Populated atomically when campaign
+-- transitions DRAFT → DISPATCHING to avoid runtime segment-drift.
+-- ============================================================
+CREATE TABLE crm_campaign_recipients (
+    id            BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED  NOT NULL,
+    campaign_id   BIGINT UNSIGNED  NOT NULL,
+    customer_id   BIGINT UNSIGNED  NOT NULL,
+    channel       ENUM('EMAIL','WHATSAPP') NOT NULL,
+    address       VARCHAR(255)     NOT NULL              COMMENT 'Email or E.164 phone number',
+    status        ENUM('PENDING','SENT','DELIVERED','OPENED','CLICKED','FAILED','OPTED_OUT') NOT NULL DEFAULT 'PENDING',
+    failure_reason VARCHAR(255)    NULL,
+    sent_at       TIMESTAMP        NULL,
+    delivered_at  TIMESTAMP        NULL,
+    opened_at     TIMESTAMP        NULL,
+    clicked_at    TIMESTAMP        NULL,
+    created_at    TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id)   REFERENCES tenants(id),
+    FOREIGN KEY (campaign_id) REFERENCES crm_campaigns(id) ON DELETE CASCADE,
+    FOREIGN KEY (customer_id) REFERENCES crm_customers(id),
+    UNIQUE KEY uq_campaign_customer_channel (campaign_id, customer_id, channel),
+    INDEX idx_campaign_status (campaign_id, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 46: crm_opt_outs
+-- Customers who have opted out of a specific channel.
+-- CHECKED before every campaign dispatch — never message an opted-out customer.
+-- ============================================================
+CREATE TABLE crm_opt_outs (
+    id            BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id     BIGINT UNSIGNED  NOT NULL,
+    customer_id   BIGINT UNSIGNED  NOT NULL,
+    channel       ENUM('EMAIL','WHATSAPP','ALL') NOT NULL,
+    opted_out_at  TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reason        VARCHAR(255)     NULL,
+    opted_out_by  INT UNSIGNED     NULL                  COMMENT 'NULL = self-service via unsubscribe link',
+    FOREIGN KEY (tenant_id)    REFERENCES tenants(id),
+    FOREIGN KEY (customer_id)  REFERENCES crm_customers(id) ON DELETE CASCADE,
+    FOREIGN KEY (opted_out_by) REFERENCES users(id) ON DELETE SET NULL,
+    UNIQUE KEY uq_customer_channel (tenant_id, customer_id, channel),
+    INDEX idx_tenant_customer (tenant_id, customer_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 47: crm_schemes
+-- Parent-company marketing schemes that are pushed down to dealers.
+-- A scheme can define a discount, cashback, volume incentive, or offer bundle.
+-- Dealers see applicable schemes on their dashboard; CRM campaigns can
+-- attach a scheme_id to communicate offer details to customers.
+-- ============================================================
+CREATE TABLE crm_schemes (
+    id              BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id       BIGINT UNSIGNED  NOT NULL,
+    name            VARCHAR(255)     NOT NULL,
+    scheme_code     VARCHAR(50)      NOT NULL,
+    type            ENUM('DISCOUNT','CASHBACK','VOLUME_INCENTIVE','COMBO_OFFER','LOYALTY') NOT NULL,
+    description     TEXT             NULL,
+    discount_pct    DECIMAL(5,2)     NULL                COMMENT 'Percentage off, e.g. 10.00 = 10%',
+    cashback_amount DECIMAL(10,2)    NULL                COMMENT 'Fixed INR cashback per unit',
+    min_purchase_qty SMALLINT UNSIGNED NULL              COMMENT 'Minimum units for volume incentive',
+    target_role     ENUM('DEALER','DRIVER','ALL')        NOT NULL DEFAULT 'DEALER',
+    valid_from      DATE             NOT NULL,
+    valid_to        DATE             NOT NULL,
+    is_active       TINYINT(1)       NOT NULL DEFAULT 1,
+    banner_file_id  BIGINT UNSIGNED  NULL                COMMENT 'FK files — promotional banner image',
+    terms_text      TEXT             NULL,
+    created_by      INT UNSIGNED     NULL,
+    created_at      TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id)      REFERENCES tenants(id),
+    FOREIGN KEY (banner_file_id) REFERENCES files(id) ON DELETE SET NULL,
+    FOREIGN KEY (created_by)     REFERENCES users(id) ON DELETE SET NULL,
+    UNIQUE KEY uq_tenant_code (tenant_id, scheme_code),
+    INDEX idx_tenant_active_dates (tenant_id, is_active, valid_from, valid_to)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 48: crm_scheme_dealer_targets
+-- Per-dealer volume/revenue targets within a parent-company scheme.
+-- SchemeService tracks attainment in real-time by joining sales data.
+-- ============================================================
+CREATE TABLE crm_scheme_dealer_targets (
+    id              BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id       BIGINT UNSIGNED  NOT NULL,
+    scheme_id       BIGINT UNSIGNED  NOT NULL,
+    dealer_id       INT UNSIGNED     NOT NULL,
+    volume_target   SMALLINT UNSIGNED NOT NULL DEFAULT 0  COMMENT 'Units to sell within scheme period',
+    revenue_target  DECIMAL(12,2)    NULL                 COMMENT 'INR revenue target (optional)',
+    incentive_on_hit DECIMAL(10,2)   NULL                 COMMENT 'Bonus INR paid to dealer on target hit',
+    volume_achieved SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    revenue_achieved DECIMAL(12,2)   NOT NULL DEFAULT 0.00,
+    target_hit      TINYINT(1)       NOT NULL DEFAULT 0,
+    target_hit_at   TIMESTAMP        NULL,
+    created_at      TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY (scheme_id) REFERENCES crm_schemes(id) ON DELETE CASCADE,
+    FOREIGN KEY (dealer_id) REFERENCES users(id),
+    UNIQUE KEY uq_scheme_dealer (scheme_id, dealer_id),
+    INDEX idx_tenant_scheme (tenant_id, scheme_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 49: crm_dealer_sales_daily
+-- Pre-aggregated daily sales metrics per dealer. Populated nightly by
+-- DealerSalesRollupJob from driver_handshakes + delivery_incentives +
+-- claims. Powers dealer sales graphs with O(1) range queries.
+-- ============================================================
+CREATE TABLE crm_dealer_sales_daily (
+    id              BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id       BIGINT UNSIGNED  NOT NULL,
+    dealer_id       INT UNSIGNED     NOT NULL,
+    sale_date       DATE             NOT NULL,
+    batteries_delivered SMALLINT UNSIGNED NOT NULL DEFAULT 0  COMMENT 'Handshakes completed',
+    claims_raised   SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    replacements_done SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+    incentives_paid DECIMAL(10,2)    NOT NULL DEFAULT 0.00,
+    active_customers INT UNSIGNED    NOT NULL DEFAULT 0       COMMENT 'Distinct customers served',
+    created_at      TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY (dealer_id) REFERENCES users(id),
+    UNIQUE KEY uq_dealer_date (tenant_id, dealer_id, sale_date),
+    INDEX idx_tenant_dealer_date (tenant_id, dealer_id, sale_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 50: crm_unsubscribe_tokens
+-- Single-use signed tokens embedded in campaign email footers.
+-- Allows customers to self-service opt-out without logging in.
+-- Token = SHA-256(recipient_id + campaign_id + secret_salt) stored
+-- hashed; plaintext sent in URL only.
+-- ============================================================
+CREATE TABLE crm_unsubscribe_tokens (
+    id              BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id       BIGINT UNSIGNED  NOT NULL,
+    recipient_id    BIGINT UNSIGNED  NOT NULL              COMMENT 'FK crm_campaign_recipients.id',
+    token_hash      CHAR(64)         NOT NULL              COMMENT 'SHA-256 of plaintext token',
+    channel         ENUM('EMAIL','WHATSAPP','ALL') NOT NULL,
+    used            TINYINT(1)       NOT NULL DEFAULT 0,
+    expires_at      TIMESTAMP        NOT NULL,
+    created_at      TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (tenant_id)    REFERENCES tenants(id),
+    FOREIGN KEY (recipient_id) REFERENCES crm_campaign_recipients(id) ON DELETE CASCADE,
+    INDEX idx_token_hash (token_hash),
+    INDEX idx_recipient  (recipient_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 51: claim_tracking_tokens
+-- One cryptographically random token per claim.
+-- Embedded as a URL in every claim confirmation & status-change email/WhatsApp.
+-- No authentication required to use — the token IS the credential.
+-- Token = hex(random_bytes(32)), stored as-is (NOT hashed) because it is
+-- a long-lived secret URL; HTTPS is the transport-layer protection.
+-- Reissued if expired (claim re-opened edge case); old token deleted first.
+-- ============================================================
+CREATE TABLE claim_tracking_tokens (
+    id              BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    tenant_id       BIGINT UNSIGNED  NOT NULL,
+    claim_id        INT UNSIGNED     NOT NULL,
+    token           CHAR(64)         NOT NULL  COMMENT 'hex(random_bytes(32)) — secret URL token',
+    expires_at      TIMESTAMP        NOT NULL  COMMENT 'claim.created_at + TRACKING_TOKEN_TTL_DAYS',
+    view_count      INT UNSIGNED     NOT NULL DEFAULT 0,
+    last_viewed_at  TIMESTAMP        NULL,
+    created_at      TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_claim  (claim_id),
+    UNIQUE KEY uq_token  (token),
+    INDEX idx_tenant     (tenant_id),
+    FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+    FOREIGN KEY (claim_id)  REFERENCES claims(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
+-- TABLE 52: ticket_lookup_attempts
+-- Rate-limit log for the public /track/lookup endpoint.
+-- Prevents enumeration of claim (ticket) numbers by unauthenticated actors.
+-- ip_address stored as VARCHAR(45) to support both IPv4 and IPv6.
+-- Rows pruned nightly by cron: DELETE WHERE attempted_at < NOW() - INTERVAL 1 DAY
+-- ============================================================
+CREATE TABLE ticket_lookup_attempts (
+    id              BIGINT UNSIGNED  AUTO_INCREMENT PRIMARY KEY,
+    ip_address      VARCHAR(45)      NOT NULL,
+    ticket_number   VARCHAR(50)      NULL      COMMENT 'The ticket number entered (for abuse analysis)',
+    attempted_at    TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_ip_time (ip_address, attempted_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
 
 ---
@@ -998,6 +1673,11 @@ Enforcement in ClaimController::update():
 > Use the recursive CTE below to traverse the full chain in both directions.
 
 ```sql
+-- Cycle guard (§11.20): cap recursion depth to 50 hops per session.
+-- MySQL default @@cte_max_recursion_depth = 1000 will spin indefinitely on a circular
+-- mother_battery_id reference (A→B→C→A). 50 is safe: no real battery chain will exceed it.
+SET @@cte_max_recursion_depth = 50;
+
 -- Given ANY serial in a replacement chain, return full history
 WITH RECURSIVE lineage AS (
     -- Anchor: find the ultimate mother (no mother_battery_id)
@@ -1008,11 +1688,12 @@ WITH RECURSIVE lineage AS (
 
     UNION ALL
 
-    -- Recurse UP to find root
+    -- Recurse UP to find root (halts at depth 50 if cycle exists)
     SELECT p.id, p.serial_number, p.mother_battery_id,
            p.status, p.mfg_year, p.mfg_week, l.generation - 1
     FROM   batteries p
     JOIN   lineage   l ON p.id = l.mother_battery_id
+    WHERE  ABS(l.generation) < 50   -- secondary cycle guard per-row
 ),
 root AS (SELECT id FROM lineage ORDER BY generation LIMIT 1),
 full_chain AS (
@@ -1028,6 +1709,7 @@ full_chain AS (
            b.status, b.mfg_year, b.mfg_week, fc.depth + 1
     FROM   batteries b
     JOIN   full_chain fc ON b.mother_battery_id = fc.id
+    WHERE  fc.depth < 50   -- secondary cycle guard per-row
 )
 SELECT * FROM full_chain ORDER BY depth;
 -- depth 0 = Mother, depth 1 = Replacement 1, depth 2 = Replacement 2, …
@@ -1151,36 +1833,53 @@ if ($diagnosis === 'OK') {
 
 ---
 
-### 5.8 Claim Number Generation (Race-Free)
+### 5.8 Claim Number Generation (Race-Free, Tenant-Scoped)
+
+> **Breaking change from v2.0:** The global `claim_sequences` table is REPLACED by
+> `tenant_sequences (tenant_id, seq_name)` (TABLE 30). Each tenant gets its own
+> independent counter, preventing cross-tenant number inference.
+> Format: `{TENANT_SLUG}-CLM-{YEAR}-{NNNNN}` e.g. `ACME-CLM-2026-00001`.
 
 ```php
-// ClaimService::generateClaimNumber(): string
-// SELECT … FOR UPDATE on claim_sequences prevents duplicate numbers under concurrent load.
+// ClaimService::generateClaimNumber(int $tenantId): string
+// Uses SELECT … FOR UPDATE on tenant_sequences to prevent duplicate numbers
+// under concurrent load. Sequence resets each calendar year (reset_cycle=yearly).
 
-public function generateClaimNumber(): string {
-    $prefix = 'CLM-' . date('Y') . '-';
+public function generateClaimNumber(int $tenantId): string {
+    $tenant = $this->tenantRepo->find($tenantId);  // cached
+    $seqName = 'CLM-' . date('Y');
     $this->db->beginTransaction();
     try {
+        // Pessimistic lock on this tenant+sequence row
         $row = $this->db->query(
-            "SELECT last_val FROM claim_sequences WHERE prefix = ? FOR UPDATE",
-            [$prefix]
+            "SELECT current_val FROM tenant_sequences
+             WHERE tenant_id = ? AND seq_name = ? FOR UPDATE",
+            [$tenantId, $seqName]
         )->fetch();
 
         if (!$row) {
+            // First claim of the year for this tenant
             $this->db->exec(
-                "INSERT INTO claim_sequences (prefix, last_val) VALUES (?, 0)", [$prefix]
+                "INSERT INTO tenant_sequences (tenant_id, seq_name, current_val, reset_cycle)
+                 VALUES (?, ?, 1, 'yearly')",
+                [$tenantId, $seqName]
             );
             $next = 1;
         } else {
-            $next = $row['last_val'] + 1;
+            $next = (int) $row['current_val'] + 1;
+            $this->db->exec(
+                "UPDATE tenant_sequences SET current_val = ?
+                 WHERE tenant_id = ? AND seq_name = ?",
+                [$next, $tenantId, $seqName]
+            );
         }
 
-        $this->db->exec(
-            "UPDATE claim_sequences SET last_val = ? WHERE prefix = ?",
-            [$next, $prefix]
-        );
         $this->db->commit();
-        return $prefix . str_pad($next, 5, '0', STR_PAD_LEFT);
+
+        // e.g. ACME-CLM-2026-00001
+        return strtoupper($tenant->slug)
+             . '-CLM-' . date('Y')
+             . '-' . str_pad($next, 5, '0', STR_PAD_LEFT);
     } catch (\Throwable $e) {
         $this->db->rollBack();
         throw $e;
@@ -1190,44 +1889,81 @@ public function generateClaimNumber(): string {
 
 ---
 
-### 5.9 OTP Rate Limiting
+### 5.9 OTP / Auth Rate Limiting (Multi-Dimensional)
+
+> Three independent rate-limit axes protect against distributed brute-force.
+> All checks use the updated `login_attempts` schema (TABLE 19).
 
 ```php
-// AuthService::checkRateLimit(int $userId, string $ip): void
-// Called at the START of AuthController::verifyOtp(), before any token lookup.
+// AuthService::checkRateLimit(
+//     string $identifier,   // email or phone — pre-auth key
+//     string $ip,
+//     ?int   $tenantId,     // NULL on public send-OTP route
+//     string $attemptType   // SEND_OTP | VERIFY_OTP | REFRESH_TOKEN
+// ): void
+// Called BEFORE any token lookup or credential check.
 
-public function checkRateLimit(int $userId, string $ip): void {
+public function checkRateLimit(
+    string $identifier,
+    string $ip,
+    ?int $tenantId,
+    string $attemptType = 'VERIFY_OTP'
+): void {
     $window = date('Y-m-d H:i:s', strtotime('-10 minutes'));
-    $count  = (int) $this->db->query(
+
+    // Axis 1: per identifier (stops single-account hammering from many IPs)
+    $byIdentifier = (int) $this->db->query(
         "SELECT COUNT(*) FROM login_attempts
-         WHERE user_id = ? AND success = 0 AND attempted_at > ?",
-        [$userId, $window]
+         WHERE identifier = ? AND attempt_type = ? AND success = 0
+         AND attempted_at > ?",
+        [$identifier, $attemptType, $window]
     )->fetchColumn();
 
-    if ($count >= 5) {
+    // Axis 2: per IP (stops credential-stuffing / distributed spray)
+    $byIp = (int) $this->db->query(
+        "SELECT COUNT(*) FROM login_attempts
+         WHERE ip_address = ? AND attempt_type = ? AND success = 0
+         AND attempted_at > ?",
+        [$ip, $attemptType, $window]
+    )->fetchColumn();
+
+    // Axis 3: per tenant burst (stops bulk-compromise of one tenant)
+    $byTenant = 0;
+    if ($tenantId !== null) {
+        $byTenant = (int) $this->db->query(
+            "SELECT COUNT(*) FROM login_attempts
+             WHERE tenant_id = ? AND attempt_type = ? AND success = 0
+             AND attempted_at > ?",
+            [$tenantId, $attemptType, $window]
+        )->fetchColumn();
+    }
+
+    // Thresholds (tunable per attempt_type)
+    $limits = ['SEND_OTP' => [3, 20, 50], 'VERIFY_OTP' => [5, 30, 100], 'REFRESH_TOKEN' => [10, 50, 200]];
+    [$limId, $limIp, $limTenant] = $limits[$attemptType] ?? [5, 30, 100];
+
+    if ($byIdentifier >= $limId || $byIp >= $limIp || $byTenant >= $limTenant) {
+        // Log CRITICAL audit event regardless of which axis triggered
         $this->db->exec(
             "INSERT INTO audit_logs
-             (user_id, action, entity_type, entity_id, ip_address, severity)
-             VALUES (?, 'otp.rate_limited', 'users', ?, ?, 'CRITICAL')",
-            [$userId, $userId, $ip]
+             (tenant_id, user_id, action, entity_type, ip_address, severity, new_values)
+             VALUES (?, NULL, 'auth.rate_limited', 'login_attempts', ?, 'CRITICAL', ?)",
+            [
+                $tenantId,
+                $ip,
+                json_encode([
+                    'identifier' => $identifier,
+                    'type'       => $attemptType,
+                    'by_id'      => $byIdentifier,
+                    'by_ip'      => $byIp,
+                    'by_tenant'  => $byTenant,
+                ])
+            ]
         );
         throw new AuthException('Too many failed attempts. Retry in 10 minutes.');
     }
 }
-
-// Verification flow in AuthController::verifyOtp():
-//   1. checkRateLimit($user->id, $_SERVER['REMOTE_ADDR'])
-//   2. SELECT token_hash, expires_at, used FROM otp_tokens
-//      WHERE user_id=? AND used=0 AND expires_at > NOW()
-//      ORDER BY created_at DESC LIMIT 1
-//   3. if (!hash_equals(hash('sha256', $inputOtp), $row['token_hash'])) {
-//          INSERT login_attempts (user_id, ip_address, success=0)
-//          throw AuthException('Invalid OTP')
-//      }
-//   4. On success: UPDATE otp_tokens SET used=1; INSERT login_attempts (success=1)
-//   5. session_regenerate_id(true); create session
 ```
-
 ---
 
 ### 5.10 Delivery Incentive Gating (Handshake-Required)
@@ -1274,6 +2010,15 @@ On re-import of the same or refreshed Excel file (duplicate serials must not cor
 
 ```php
 // TallyService::importExcel() — per-row UPSERT
+// XXE + Zip Bomb guard (§11.18): disable XML entity expansion before phpspreadsheet opens
+// the file. Modern .xlsx files are ZIP archives containing XML; a malicious file can define
+// an XXE entity that reads /etc/passwd or issues SSRF requests. libxml_disable_entity_loader
+// prevents this. setReadDataOnly(true) enables streaming mode, capping peak memory usage.
+libxml_disable_entity_loader(true);
+$reader = \PhpOffice\PhpSpreadsheet\IOFactory::createReaderForFile($filePath);
+$reader->setReadDataOnly(true);   // streaming: skip style/chart objects — drastically limits RAM
+$spreadsheet = $reader->load($filePath);
+
 $this->db->exec("
     INSERT INTO batteries (serial_number, is_in_tally, mfg_year, mfg_week, model)
     VALUES (:serial, 1, :year, :week, :model)
@@ -1370,58 +2115,532 @@ interface QueueDriverInterface {
 
 ### 5.14 Tenant Middleware & Context Scoping
 
-Every inbound request resolves a tenant **before** controllers execute. All repository queries
-automatically inject the tenant context so cross-tenant data leaks are structurally impossible.
+> **Security rule:** JWT claim is the SOLE authoritative source of tenant identity
+> on authenticated routes. Subdomain / `X-Tenant-ID` serve only as routing hints on
+> public (pre-auth) endpoints and MUST match the JWT tenant before being trusted.
+
+```
+Resolution priority on every request
+─────────────────────────────────────
+1. If Authorization: Bearer <token> is present:
+   a. Decode JWT; verify iss = APP_URL, aud = "battery-saas", kid matches current key.
+   b. Extract tenant_id + tenant_slug from JWT claims.
+   c. Assert subdomain (if present) == JWT tenant slug → 403 if mismatch.
+   d. X-Tenant-ID header is IGNORED on authenticated routes.
+
+2. If no Bearer token (public / pre-auth routes only):
+   a. Derive tenant from subdomain (acme.example.com → slug = "acme").
+   b. Accept X-Tenant-ID header as fallback (e.g. native app / API client
+      that cannot set a subdomain).
+   c. Load tenant row; assert is_active = 1.
+   d. Store in RequestContext for OTP send, rate-limit, and token issuance.
+
+3. Plan enforcement (PlanGuard) runs AFTER tenant resolution:
+   PlanGuard::check($tenant, 'claims.create') → 429 / 403 if quota exceeded.
+```
 
 ```php
-// app/Shared/Auth/Middleware/TenantMiddleware.php
-class TenantMiddleware {
-    public function handle(Request $request, callable $next): Response {
-        // 1. Try subdomain: acme.battery-mgmt.com → slug = 'acme'
-        $slug = $this->extractSubdomain($request->host());
+// TenantMiddleware::handle(Request $request, Closure $next): Response
+public function handle(Request $request, Closure $next): Response
+{
+    $token = $this->parseBearerToken($request);
 
-        // 2. Fallback: X-Tenant-ID header (for mobile / API clients on bare domain)
+    if ($token !== null) {
+        // ── Authenticated route ──────────────────────────────────
+        try {
+            $claims = $this->jwt->decode($token, [
+                'iss' => config('app.url'),
+                'aud' => 'battery-saas',
+            ]);
+        } catch (JwtException $e) {
+            return response()->json(['error' => 'invalid_token'], 401);
+        }
+
+        $tenant = $this->tenantRepo->findOrFail((int) $claims->tenant_id);
+
+        // Subdomain MUST match JWT when present (prevents host-header injection)
+        $subdomain = $this->extractSubdomain($request->getHost());
+        if ($subdomain && $subdomain !== $tenant->slug) {
+            return response()->json(['error' => 'tenant_mismatch'], 403);
+        }
+
+        if (!$tenant->is_active) {
+            return response()->json(['error' => 'tenant_suspended'], 403);
+        }
+
+        RequestContext::set($tenant, (int) $claims->sub);
+
+    } else {
+        // ── Pre-auth public route (send-OTP, login) ──────────────
+        $slug = $this->extractSubdomain($request->getHost())
+             ?? $request->header('X-Tenant-ID');       // only accepted pre-auth
+
         if (!$slug) {
-            $slug = $request->header('X-Tenant-ID');
+            return response()->json(['error' => 'tenant_required'], 400);
         }
 
-        // 3. JWT claim: tenant_id embedded at token issuance
-        if (!$slug && $jwtTenantId = $this->jwtService->getTenantId($request)) {
-            TenantContext::setById($jwtTenantId);
+        $tenant = $this->tenantRepo->findBySlug($slug);
+        if (!$tenant || !$tenant->is_active) {
+            return response()->json(['error' => 'tenant_not_found'], 404);
+        }
+
+        RequestContext::setTenantOnly($tenant);
+    }
+
+    return $next($request);
+}
+```
+
+**JWT key rotation (`kid`):** Each JWT header carries `kid` (key ID). `JwtKeyStore`
+fetches the public key by `kid` from Redis (cache-aside, TTL 5 min). Old tokens with
+superseded `kid` are rejected once the grace period (15 min overlap) expires.
+
+**Tenant suspension re-check on refresh:** `POST /auth/refresh` always re-reads
+`tenants.is_active` from DB (bypassing cache) so suspended tenants are blocked
+within one refresh cycle even if the access token has not expired yet.
+### 5.15 RBAC Migration Flag
+
+When a tenant is first created all users inherit permissions from `legacy_role` (the ENUM on `users`).
+Once the admin has seeded `user_roles` + `role_permissions` tables, they set:
+
+```
+tenant_settings.key = 'rbac_migrated', value = 'true'
+```
+
+`ApiAuthMiddleware` then switches permission resolution mode:
+
+```php
+if ($this->tenantSettings->get('rbac_migrated') === 'true') {
+    // Authoritative path: user_roles → roles → role_permissions
+    $permissions = $this->rbac->permissionsForUser($user->id);
+} else {
+    // Bootstrap path: derive permissions from legacy_role ENUM
+    $permissions = LegacyRoleMapper::toPermissions($user->legacy_role);
+}
+```
+
+**Rules:**
+- Once set to `'true'`, this flag is **irreversible** (no rollback via API; requires DB intervention).
+- The `/api/v1/admin/tenants/{id}/migrate-rbac` endpoint sets the flag only after validating that
+  every active user has at least one `user_roles` row.
+- `legacy_role` column is retained for audit history but is completely ignored post-migration.
+
+### 5.17 File Serve — Quarantine & Integrity Guard
+
+`FileController::serve()` MUST refuse delivery and return `403 file_unavailable` whenever any of these
+conditions is true before streaming to the client:
+
+```php
+// FileController::serve(int $id, Request $request): Response
+$file = File::findOrFail($id);
+
+// 1. Ownership / tenant scope guard
+abort_unless($file->tenant_id === $request->tenantId(), 403);
+
+// 2. Quarantine / scan gate
+if (
+    $file->virus_scan_status === 'INFECTED'
+    || $file->quarantined_at !== null
+    || ($file->virus_scan_status === 'PENDING' && $file->isHighRiskType())
+) {
+    return response()->json(['error' => 'file_unavailable', 'reason' => 'quarantined'], 403);
+}
+
+// 3. Integrity check (SHA-256 of physical bytes must match stored checksum)
+$physicalPath = storage_path('app/' . $file->storage_path);
+if (hash_file('sha256', $physicalPath) !== $file->checksum_sha256) {
+    // Integrity failure: quarantine immediately and alert
+    $file->update(['quarantined_at' => now(), 'virus_scan_status' => 'INFECTED']);
+    event(new FileIntegrityFailure($file));
+    return response()->json(['error' => 'file_unavailable', 'reason' => 'integrity_failure'], 403);
+}
+
+// 4. Stream file only after all checks pass
+```
+
+`isHighRiskType()` returns `true` for extensions: `exe`, `sh`, `bat`, `cmd`, `ps1`, `php`, `py`, `js`.  
+High-risk PENDING files are blocked until the async virus-scan worker completes.
+
+---
+
+### 5.18 CRM Lead Pipeline State Machine
+
+A lead moves through a defined set of stages. Stage changes are recorded in `crm_lead_activities` (TABLE 41) for full auditability.
+
+```
+         ┌──────────────────────────────────────────────┐
+         │                  LEAD STAGES                 │
+         │                                              │
+         │  NEW ──→ CONTACTED ──→ QUALIFIED ──→ PROPOSAL │
+         │                                   ├──→ WON   │
+         │                                   └──→ LOST   │
+         │                                              │
+         │  Any stage can transition directly to LOST.  │
+         └──────────────────────────────────────────────┘
+```
+
+```php
+// LeadService::transition(Lead $lead, string $newStage, int $actorId): void
+//
+// RULES
+// 1. WON / LOST are terminal states — no further transitions.
+// 2. Only allowed forward transitions (see matrix below).
+// 3. Stage change fires LeadStageChanged event → listener updates
+//    crm_customers.lifecycle_stage if WON (→ ACTIVE) or LOST.
+// 4. Activity log row written atomically in the same DB transaction.
+
+const ALLOWED_TRANSITIONS = [
+    'NEW'       => ['CONTACTED', 'LOST'],
+    'CONTACTED' => ['QUALIFIED', 'LOST'],
+    'QUALIFIED' => ['PROPOSAL',  'LOST'],
+    'PROPOSAL'  => ['WON',       'LOST'],
+    'WON'       => [],  // terminal
+    'LOST'      => [],  // terminal
+];
+
+DB::transaction(function() use ($lead, $newStage, $actorId) {
+    if (! in_array($newStage, self::ALLOWED_TRANSITIONS[$lead->stage], true)) {
+        throw new BusinessRuleException("INVALID_LEAD_TRANSITION");
+    }
+    $oldStage = $lead->stage;
+    $lead->update([
+        'stage'      => $newStage,
+        'closed_at'  => in_array($newStage, ['WON','LOST']) ? now() : null,
+    ]);
+    CrmLeadActivity::create([
+        'tenant_id'     => $lead->tenant_id,
+        'lead_id'       => $lead->id,
+        'user_id'       => $actorId,
+        'activity_type' => 'STAGE_CHANGE',
+        'old_stage'     => $oldStage,
+        'new_stage'     => $newStage,
+    ]);
+    EventBus::dispatch(new LeadStageChanged($lead, $oldStage, $newStage));
+});
+```
+
+**Lifecycle stage sync:** when a lead transitions to **WON**, `CustomerService::syncLifecycle()` upgrades `crm_customers.lifecycle_stage`:
+- First WON → `ACTIVE`  
+- Any subsequent WON on same customer → `REPEAT`  
+- All leads LOST, no WON → `CHURNED` (cron run weekly)
+
+---
+
+### 5.19 Campaign Dispatch (Email + WhatsApp)
+
+`CampaignService::dispatch(Campaign $campaign)` is called by `DispatchCampaignBatchJob`.
+
+**Pre-dispatch checklist (all must pass or campaign is CANCELLED):**
+1. `campaign.status = 'SCHEDULED'` → set `'DISPATCHING'`  
+2. Resolve segment OR load explicit recipient list → build `crm_campaign_recipients` rows atomically  
+3. **Opt-out filter:** `LEFT JOIN crm_opt_outs` on `(customer_id, channel IN (?, 'ALL'))` → exclude  
+4. **Consent gate:** WhatsApp channel requires `customers.phone` to be in E.164 format and not NULL  
+5. Render template per recipient using `TemplateRenderer::render($template, $vars)` — twig-sandbox, allow-listed variables only, no PHP execution
+
+```php
+// Campaign dispatch — chunked fan-out (max 500 per job to avoid memory exhaustion)
+// Each chunk is pushed as a separate DispatchCampaignBatchJob onto the CRM queue.
+
+public function dispatch(Campaign $campaign): void
+{
+    $this->assertStatus($campaign, 'SCHEDULED');
+    $campaign->update(['status' => 'DISPATCHING', 'dispatched_at' => now()]);
+
+    $recipientIds = $this->buildRecipientList($campaign); // writes to crm_campaign_recipients
+    $campaign->update(['total_recipients' => count($recipientIds)]);
+
+    foreach (array_chunk($recipientIds, 500) as $chunk) {
+        Queue::push(new DispatchCampaignBatchJob($campaign->id, $chunk), queue: 'crm');
+    }
+}
+
+// DispatchCampaignBatchJob::handle()
+foreach ($recipientIds as $recipientId) {
+    $recipient = CrmCampaignRecipient::find($recipientId);
+    $customer  = $recipient->customer;
+
+    // Skip if opted out (double-checked here in case of race)
+    if (OptOutRepository::isOptedOut($customer->id, $recipient->channel)) {
+        $recipient->update(['status' => 'OPTED_OUT']);
+        continue;
+    }
+
+    $vars = [
+        'customer_name' => $customer->name,
+        'dealer_name'   => $recipient->campaign->tenant->name,
+        'offer_details' => $recipient->campaign->scheme?->description ?? '',
+        'scheme_name'   => $recipient->campaign->scheme?->name ?? '',
+        'valid_until'   => $recipient->campaign->scheme?->valid_to ?? '',
+        'cta_link'      => $this->buildCtaLink($recipient),
+        'unsub_link'    => $this->buildUnsubLink($recipient),  // single-use token
+    ];
+
+    $rendered = TemplateRenderer::render($recipient->campaign->template, $vars);
+
+    match ($recipient->channel) {
+        'EMAIL'    => $this->emailChannel->send($recipient->address, $rendered),
+        'WHATSAPP' => $this->whatsappChannel->send($recipient->address, $rendered),
+    };
+
+    $recipient->update(['status' => 'SENT', 'sent_at' => now()]);
+    $campaign->increment('sent_count');
+}
+```
+
+**Unsubscribe flow:**
+1. Footer of every email contains `?unsub=<plaintext_token>`  
+2. `GET /api/v1/crm/unsubscribe?token=<tok>` → `CampaignController::unsubscribe()`  
+3. Lookup `crm_unsubscribe_tokens WHERE token_hash = SHA-256(tok) AND used=0 AND expires_at > NOW()`  
+4. Mark token `used=1`, insert into `crm_opt_outs`, return 200 with confirmation page  
+5. WhatsApp uses carrier/BSP-level opt-out webhook → mapped to same `crm_opt_outs` row
+
+**Rate limits:**
+- Email: ≤ 200 messages/min/tenant (SMTP throttle via `MAIL_RATE_PER_MIN` env var)  
+- WhatsApp: ≤ 80 messages/min/tenant (BSP tier limit; configurable via `WA_RATE_PER_MIN`)
+
+---
+
+### 5.20 Segment Builder (JSON Rule Evaluator)
+
+`SegmentService::resolve(Segment $segment): array` returns `[crm_customer_id, ...]`.
+
+```php
+// SECURITY: field names come from DB-stored JSON — NEVER interpolated raw into SQL.
+// All fields are routed through a whitelist map to their safe column expression.
+
+const FIELD_WHITELIST = [
+    'lifecycle_stage'         => 'c.lifecycle_stage',
+    'city'                    => 'c.city',
+    'state'                   => 'c.state',
+    'total_batteries_bought'  => 'c.total_batteries_bought',
+    'last_purchase_days_ago'  => 'DATEDIFF(NOW(), c.last_purchase_at)',
+    'dealer_id'               => 'c.dealer_id',
+    'source'                  => 'c.source',
+];
+
+const OP_MAP = [
+    'eq'  => '=',
+    'neq' => '!=',
+    'gt'  => '>',
+    'gte' => '>=',
+    'lt'  => '<',
+    'lte' => '<=',
+    'in'  => 'IN',
+];
+
+public function resolve(Segment $segment): array
+{
+    $rules   = json_decode($segment->rules, true);
+    $clauses = $this->buildClauses($rules['conditions']);
+    $joiner  = $rules['operator'] === 'OR' ? 'OR' : 'AND';
+
+    $sql = "SELECT c.id FROM crm_customers c
+            WHERE c.tenant_id = ? AND c.deleted_at IS NULL
+              AND (" . implode(" {$joiner} ", $clauses['sql']) . ")";
+
+    return DB::select($sql, array_merge([$segment->tenant_id], $clauses['bindings']));
+}
+
+private function buildClauses(array $conditions): array
+{
+    $sqls = []; $bindings = [];
+    foreach ($conditions as $cond) {
+        $col = self::FIELD_WHITELIST[$cond['field']]
+            ?? throw new BusinessRuleException("INVALID_SEGMENT_FIELD: {$cond['field']}");
+        $op  = self::OP_MAP[$cond['op']]
+            ?? throw new BusinessRuleException("INVALID_SEGMENT_OP: {$cond['op']}");
+
+        if ($op === 'IN') {
+            $placeholders = implode(',', array_fill(0, count($cond['value']), '?'));
+            $sqls[]       = "{$col} IN ({$placeholders})";
+            $bindings      = array_merge($bindings, $cond['value']);
         } else {
-            $tenant = $this->tenantRepo->findBySlug($slug)
-                ?? throw new TenantException("Unknown tenant: {$slug}", 404);
-
-            if (!$tenant->is_active) {
-                throw new TenantException("Tenant suspended", 403);
-            }
-            TenantContext::set($tenant);
+            $sqls[]     = "{$col} {$op} ?";
+            $bindings[] = $cond['value'];
         }
+    }
+    return ['sql' => $sqls, 'bindings' => $bindings];
+}
+```
 
-        return $next($request);
+---
+
+### 5.21 Parent Company Scheme Distribution & Attainment
+
+**Scheme lifecycle:**
+
+```
+ADMIN/CRM_MGR creates scheme (TABLE 47)
+        ↓
+Dealer targets set per scheme (TABLE 48)
+        ↓
+DealerSalesRollupJob runs nightly:
+  UPDATE crm_scheme_dealer_targets
+     SET volume_achieved  = (SELECT COUNT(*) FROM driver_handshakes
+                             WHERE dealer_id = ? AND handshake_at BETWEEN s.valid_from AND s.valid_to),
+         revenue_achieved = (derived from delivery_incentives in same window)
+   WHERE target_hit = 0;
+        ↓
+SchemeService::checkAttainment(Scheme $scheme):
+  for each target row WHERE target_hit=0:
+    if volume_achieved >= volume_target:
+      UPDATE target_hit=1, target_hit_at=NOW()
+      EventBus::dispatch(new SchemeTargetHit($target))
+          → Notification to dealer via email + WhatsApp
+          → Audit log entry
+```
+
+**Dealer dashboard widget (§13.3):** shows each active scheme with:
+- Progress bar `volume_achieved / volume_target`
+- Remaining days until `valid_to`
+- Incentive amount unlocked on target hit
+
+**Rules enforced by SchemeService:**
+- A scheme's `valid_from` ≤ `valid_to` (validated on create)
+- A dealer may not belong to conflicting schemes of the same type in overlapping date ranges
+- Attainment is recalculated nightly; real-time preview endpoint recalculates on-demand without committing
+
+---
+
+### 5.22 Claim Tracking Token — Issuance, Embedding & Resolution
+
+#### Token Lifecycle
+
+```
+ClaimService::create()
+        ↓
+TrackingService::issue($claim)
+  1. token = bin2hex(random_bytes(32))          // 64-char hex; 256-bit entropy
+  2. expires_at = $claim->created_at + env('TRACKING_TOKEN_TTL_DAYS', 90) days
+  3. INSERT INTO claim_tracking_tokens
+         (tenant_id, claim_id, token, expires_at)
+         VALUES (:tid, :cid, :tok, :exp)
+        ON DUPLICATE KEY UPDATE
+         token=:tok, expires_at=:exp,
+         view_count=0, last_viewed_at=NULL
+         -- Handles edge case: claim re-opened after CLOSED → fresh token
+  4. return TRACKING_URL_BASE . '/track/' . $token
+        // e.g.  https://track.mybatteryapp.com/track/3fa2c84d...
+```
+
+#### URL Resolution (Public — no auth required)
+
+```
+GET /track/{token}          (HTML page for customers)
+GET /api/v1/track/{token}   (JSON — for bot / mobile)
+
+TrackingController::resolve(string $token): array
+  1. Validate: token is exactly 64 hex chars — else 404
+  2. SELECT ctt.*, c.claim_number, c.status, c.created_at,
+            c.diagnosis_notes, c.replacement_serial,
+            u.name  AS dealer_name,
+            sc.name AS service_centre_name
+     FROM   claim_tracking_tokens ctt
+     JOIN   claims  c ON c.id = ctt.claim_id
+     JOIN   users   u ON u.id = c.dealer_id
+     LEFT JOIN service_centres sc ON sc.id = c.service_centre_id
+     WHERE  ctt.token = :token
+  3. If not found → 404 (generic "Invalid or expired link" message; do NOT
+     confirm whether the claim exists — prevents enumeration)
+  4. If expires_at < NOW() → return expired view:
+        "This tracking link has expired. Please contact your dealer."
+  5. Apply PII masking rules (§14.6) before returning payload
+  6. UPDATE claim_tracking_tokens
+        SET view_count = view_count + 1, last_viewed_at = NOW()
+      WHERE token = :token
+  7. Return masked tracking payload (§14.1)
+```
+
+#### Ticket Number Lookup (Rate-Limited Public Endpoint)
+
+```
+POST /track/lookup   body: { "ticket_number": "ACME-CLM-2026-00001" }
+
+TrackingController::lookup(string $ticketNumber): RedirectResponse
+  Rate-limit check (TABLE 52):
+    count = SELECT COUNT(*) FROM ticket_lookup_attempts
+             WHERE ip_address = :ip AND attempted_at > NOW() - INTERVAL 15 MINUTE
+    if count >= 10:
+      return 429 "Too many lookup attempts. Please try again later."
+
+  INSERT INTO ticket_lookup_attempts (ip_address, ticket_number)
+    VALUES (:ip, :ticket)                   // always log the attempt
+
+  SELECT ctt.token
+    FROM claim_tracking_tokens ctt
+    JOIN claims c ON c.id = ctt.claim_id
+   WHERE c.claim_number = :ticketNumber
+     AND c.tenant_id    = TenantContext::id()    // tenant scoped — no cross-tenant leak
+     AND ctt.expires_at > NOW()
+   LIMIT 1
+
+  If not found → 422 "Ticket not found or link has expired."
+                  // Generic — do NOT confirm whether claim number exists
+  Else → 302 redirect to /track/{token}
+```
+
+#### Token Injection into Notifications
+
+```php
+// app/Modules/Notifications/Listeners/NotifyOnClaimChange.php
+
+class NotifyOnClaimChange implements EventListenerInterface
+{
+    public function handle(ClaimStatusChanged|ClaimCreated $event): void
+    {
+        $claim       = $event->claim;
+        $trackingUrl = TrackingService::getOrCreateToken($claim->id, $claim->tenantId);
+
+        $body = $this->renderTemplate($claim, [
+            '{{tracking_url}}' => $trackingUrl,
+            '{{claim_number}}' => $claim->claimNumber,
+            '{{status_label}}' => ClaimStatusLabels::forCustomer($claim->status),
+        ]);
+
+        // Email notification (TABLE 20 email_queue)
+        EmailQueue::push(
+            tenantId:  $claim->tenantId,
+            recipient: $claim->customerEmail,
+            subject:   "Repair Update: {$claim->claimNumber}",
+            body:      $body,
+        );
+
+        // WhatsApp notification (Phase 3 — guarded by feature flag)
+        if (config('features.whatsapp_tracking_alerts')) {
+            WhatsAppChannel::send(
+                to:      $claim->customerPhone,
+                message: WhatsAppTemplates::repairUpdate($claim, $trackingUrl),
+            );
+        }
     }
 }
+```
 
-// app/Shared/Auth/TenantContext.php
-class TenantContext {
-    private static ?Tenant $current = null;
+**`TrackingService::getOrCreateToken()`** — idempotent helper:
 
-    public static function set(Tenant $tenant): void   { self::$current = $tenant; }
-    public static function current(): Tenant           { return self::$current ?? throw new TenantException('No tenant context'); }
-    public static function id(): int                   { return self::current()->id; }
-    public static function clear(): void               { self::$current = null; }  // call in tests
-}
-
-// app/Shared/Database/QueryBuilder.php — automatic tenant scope
-class QueryBuilder {
-    public function forTenant(): static {
-        return $this->where('tenant_id', TenantContext::id());
+```php
+// Returns existing token URL if valid, otherwise re-issues.
+public static function getOrCreateToken(int $claimId, int $tenantId): string
+{
+    $row = DB::queryOne(
+        'SELECT token, expires_at FROM claim_tracking_tokens
+          WHERE claim_id = ? AND expires_at > NOW()', [$claimId]
+    );
+    if ($row) {
+        return env('TRACKING_URL_BASE') . '/track/' . $row['token'];
     }
+    // Re-issue (token expired or not yet created)
+    return TrackingService::issue(ClaimRepository::find($claimId));
 }
+```
 
-// Usage in any repository:
-// ClaimRepository::findAll() always calls ->forTenant() internally
-// → controller is tenant-unaware; isolation is column-level, enforced in the query layer
+#### Environment Variables
+
+```dotenv
+# Tracking
+TRACKING_URL_BASE=https://track.yourdomain.com   # Base URL for public tracking links
+                                                  # Can equal APP_URL if on same domain
+TRACKING_TOKEN_TTL_DAYS=90                       # Days a tracking link stays valid
 ```
 
 ---
@@ -1498,6 +2717,102 @@ All JSON endpoints return the **standard envelope** below.
 | GET | `/api/v1/files/{id}` | Any auth | Auth-gated signed file URL |
 | GET | `/api/v1/health/live` | Public | Liveness: 200 OK always |
 | GET | `/api/v1/health/ready` | Public | DB + Redis connectivity check |
+
+### CRM API Routes — `/api/v1/crm/*`
+
+> **Middleware stack (same as core):** `TenantMiddleware` → `ApiAuthMiddleware` → `RoleMiddleware` → Controller  
+> All routes require `crm.*` permissions. Dealers see only their own customer/lead records.
+
+**Customers**
+
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| GET | `/api/v1/crm/customers` | `crm.customers.list` | Paginated customer list; dealer-scoped automatically |
+| POST | `/api/v1/crm/customers` | `crm.customers.create` | Create customer manually |
+| GET | `/api/v1/crm/customers/{id}` | `crm.customers.view` | Customer detail + leads + activity timeline |
+| PATCH | `/api/v1/crm/customers/{id}` | `crm.customers.edit` | Update profile fields |
+| DELETE | `/api/v1/crm/customers/{id}` | `crm.customers.delete` | Soft-delete |
+| GET | `/api/v1/crm/customers/{id}/leads` | `crm.leads.list` | All leads for customer |
+
+**Leads / Pipeline**
+
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| GET | `/api/v1/crm/leads` | `crm.leads.list` | Kanban/list view of all pipeline leads |
+| POST | `/api/v1/crm/leads` | `crm.leads.create` | Open new lead |
+| GET | `/api/v1/crm/leads/{id}` | `crm.leads.view` | Lead detail + activity log |
+| PATCH | `/api/v1/crm/leads/{id}` | `crm.leads.edit` | Update lead fields (expected value, follow-up) |
+| POST | `/api/v1/crm/leads/{id}/transition` | `crm.leads.transition` | Move to next stage (§5.18) |
+| POST | `/api/v1/crm/leads/{id}/activities` | `crm.leads.activity` | Log call/note/visit on a lead |
+| GET | `/api/v1/crm/pipeline/summary` | `crm.leads.list` | Stage counts + total expected value per stage |
+
+**Campaigns**
+
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| GET | `/api/v1/crm/campaigns` | `crm.campaigns.list` | List all campaigns with status + stats |
+| POST | `/api/v1/crm/campaigns` | `crm.campaigns.create` | Create campaign (DRAFT) |
+| GET | `/api/v1/crm/campaigns/{id}` | `crm.campaigns.view` | Campaign detail + per-recipient status |
+| PATCH | `/api/v1/crm/campaigns/{id}` | `crm.campaigns.edit` | Edit a DRAFT campaign |
+| POST | `/api/v1/crm/campaigns/{id}/schedule` | `crm.campaigns.send` | Schedule or immediately dispatch (§5.19) |
+| POST | `/api/v1/crm/campaigns/{id}/cancel` | `crm.campaigns.send` | Cancel a SCHEDULED campaign |
+| GET | `/api/v1/crm/campaigns/{id}/analytics` | `crm.campaigns.view` | Delivery funnel: sent/delivered/opened/clicked |
+| GET | `/api/v1/crm/unsubscribe` | Public (token) | Self-service opt-out via unsubscribe token |
+
+**Segments & Templates**
+
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| GET | `/api/v1/crm/segments` | `crm.campaigns.create` | List saved segments |
+| POST | `/api/v1/crm/segments` | `crm.campaigns.create` | Create segment with JSON rules |
+| POST | `/api/v1/crm/segments/{id}/preview` | `crm.campaigns.create` | Dry-run resolve → returns count + sample (§5.20) |
+| GET | `/api/v1/crm/templates` | `crm.campaigns.create` | List message templates |
+| POST | `/api/v1/crm/templates` | `crm.campaigns.create` | Create email/WhatsApp template |
+| PATCH | `/api/v1/crm/templates/{id}` | `crm.campaigns.create` | Update template |
+
+**Schemes**
+
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| GET | `/api/v1/crm/schemes` | `crm.schemes.view` | All active schemes (dealer sees own targets) |
+| POST | `/api/v1/crm/schemes` | `crm.schemes.manage` | Create parent-company scheme |
+| GET | `/api/v1/crm/schemes/{id}` | `crm.schemes.view` | Scheme detail + dealer attainment list |
+| PATCH | `/api/v1/crm/schemes/{id}` | `crm.schemes.manage` | Edit scheme (blocked once DISPATCHING campaigns reference it) |
+| POST | `/api/v1/crm/schemes/{id}/targets` | `crm.schemes.manage` | Assign / update dealer targets |
+| GET | `/api/v1/crm/schemes/{id}/attainment` | `crm.schemes.view` | Attainment progress per dealer |
+
+**Dealer Sales**
+
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| GET | `/api/v1/crm/dealer-sales` | `crm.sales.view` | Aggregated list; dealers see own, admins see all |
+| GET | `/api/v1/crm/dealer-sales/{dealer_id}/graph` | `crm.sales.view` | Daily series for chart rendering (§9.5) |
+| GET | `/api/v1/crm/dealer-sales/leaderboard` | `crm.sales.view` | Ranked dealer list by batteries delivered this month |
+
+### Web CRM Routes — `/web/crm/*`
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/web/crm/customers` | Customer list & search |
+| GET/POST | `/web/crm/leads` | Kanban pipeline board |
+| GET/POST | `/web/crm/campaigns` | Campaign builder UI |
+| GET | `/web/crm/campaigns/{id}/analytics` | Campaign performance dashboard |
+| GET/POST | `/web/crm/schemes` | Scheme management + dealer target grid |
+| GET | `/web/crm/dealer-sales` | Dealer sales graph + leaderboard |
+
+### Public Tracking Routes — No Authentication Required
+
+> **Middleware stack:** `RateLimitMiddleware` only (no auth, no tenant session required).  
+> Tenant is resolved from the token / ticket number itself — NOT from a subdomain or JWT.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/track/{token}` | HTML repair status page — renders progress timeline for the customer |
+| POST | `/track/lookup` | Accept `ticket_number` in body → resolve token → 302 redirect to `/track/{token}` |
+| GET | `/api/v1/track/{token}` | JSON tracking payload — for WhatsApp bot, mobile app, future integrations |
+| GET | `/web/track/{token}` | Alias of `/track/{token}` when deployed on same web domain |
+
+> **Security:** All four routes served over HTTPS only (`Strict-Transport-Security` enforced). Token is 256-bit random — brute-force infeasible. Rate-limiting: `/track/lookup` → max 10 requests / IP / 15 min (TABLE 52). Direct `/track/{token}` reads are not rate-limited (token already provides adequate access control).
 
 ### Web Routes — `/web/*` (PHP Session + CSRF)
 
@@ -1666,6 +2981,13 @@ if (!in_array($mime, ['image/webp', 'image/jpeg', 'image/png'], true)) {
 if (filesize($tmpPath) > 2 * 1024 * 1024) {   // 2 MB hard cap
     throw new ValidationException('Image exceeds 2 MB limit');
 }
+// Decompression bomb guard (§11.16): read pixel dimensions via header ONLY — zero memory allocation.
+// An attacker can send a 1KB WebP that decodes to 50000×50000 px (~10GB RAM). getimagesize()
+// reads only the file header and never loads pixel data into memory.
+$dims = @getimagesize($tmpPath);
+if (!$dims || $dims[0] > 4000 || $dims[1] > 4000) {
+    throw new ValidationException('Image dimensions must not exceed 4000×4000 px');
+}
 ```
 
 ---
@@ -1697,6 +3019,13 @@ if (filesize($tmpPath) > 2 * 1024 * 1024) {   // 2 MB hard cap
 | JWT Token Security | Access tokens expire in 15 min (RS256 or HS256-SHA512); refresh tokens are opaque, stored hashed in DB, single-use (rotated on each refresh); `alg` header validated — `none` rejected |
 | JWT Secret Rotation | `JWT_SECRET` loaded from env/vault; key rotation supported via `kid` claim and versioned secret map in `config/jwt.php` |
 | Tenant Data Isolation | Every SQL query auto-injects `tenant_id = TenantContext::id()` via `QueryBuilder::forTenant()`; cross-tenant ID guessing returns 404 (not 403) to avoid tenant enumeration |
+| Image Decompression Bomb | `getimagesize()` reads pixel dimensions **header-only** (zero pixel memory) before GD load; images exceeding 4000×4000 px are rejected before any decompression (§11.16) |
+| Excel XXE / Zip Bomb | `libxml_disable_entity_loader(true)` before phpspreadsheet; `setReadDataOnly(true)` streaming mode caps peak RAM; prevents XML entity exfiltration and ZIP decompression DoS (§11.18) |
+| OTP Double-Verification | Single atomic `UPDATE otp_tokens SET used=1 WHERE … used=0`; `rowCount()===0` short-circuits immediately — two concurrent threads cannot consume the same token (§11.19) |
+| CTE Cycle Protection | `SET @@cte_max_recursion_depth = 50` + per-row `WHERE depth < 50` guard before all recursive battery-lineage queries; terminates safely if `mother_battery_id` cycle exists in data (§11.20) |
+| Soft-Delete Unique Collision | MySQL 8 expression index `(IF(deleted_at IS NULL, 1, id))` on `(tenant_id, email)` and `(tenant_id, serial_number)`; deleted rows vacate their unique slot, allowing new records with the same identifiers (§11.21) |
+| JWT Revocation Cache Volatility | On Redis unavailability the `ApiAuthMiddleware` falls back to synchronous DB check: `auth_refresh_tokens WHERE jti=? AND revoked_at IS NOT NULL`; revoked tokens cannot regain access through a Redis restart (§11.22) |
+| Idempotency Race Condition | `IdempotencyMiddleware` atomically inserts a `status='PROCESSING'` stub row before handler execution; a concurrent duplicate hits the UNIQUE KEY and receives `409 Conflict` immediately (§11.17) |
 
 ---
 
@@ -1774,6 +3103,183 @@ Stock Journal;{date};{new_serial};1;0;0;Replacement for {old_serial}
 
 ---
 
+### 9.5 Dealer Sales Graph
+
+**Source table:** `crm_dealer_sales_daily` (TABLE 49) — pre-aggregated nightly by `DealerSalesRollupJob`.
+
+```sql
+-- Daily delivery trend for a single dealer (last 90 days)
+-- Powers line/bar chart in dealer dashboard and admin overview
+SELECT
+    sale_date,
+    batteries_delivered,
+    claims_raised,
+    replacements_done,
+    incentives_paid,
+    active_customers
+FROM  crm_dealer_sales_daily
+WHERE tenant_id = :tenant_id
+  AND dealer_id  = :dealer_id
+  AND sale_date >= CURDATE() - INTERVAL 90 DAY
+ORDER BY sale_date ASC;
+
+-- Monthly rollup (for bar chart / admin leaderboard)
+SELECT
+    YEAR(sale_date)  AS yr,
+    MONTH(sale_date) AS mo,
+    SUM(batteries_delivered) AS total_delivered,
+    SUM(claims_raised)       AS total_claims,
+    SUM(incentives_paid)     AS total_incentives,
+    MAX(active_customers)    AS peak_customers
+FROM  crm_dealer_sales_daily
+WHERE tenant_id = :tenant_id
+  AND dealer_id  = :dealer_id
+  AND sale_date >= CURDATE() - INTERVAL 12 MONTH
+GROUP BY yr, mo
+ORDER BY yr, mo;
+```
+
+**Rollup job logic (nightly, 01:30 IST):**
+```php
+// DealerSalesRollupJob::handle()
+// Runs for each tenant_id. Upserts yesterday's row per dealer.
+$yesterday = now()->subDay()->toDateString();
+
+$rows = DB::select("
+    SELECT
+        dh.dealer_id,
+        COUNT(DISTINCT dh.id)                         AS batteries_delivered,
+        COUNT(DISTINCT cl.id)                         AS claims_raised,
+        COUNT(DISTINCT rp.id)                         AS replacements_done,
+        COALESCE(SUM(di.amount), 0)                   AS incentives_paid,
+        COUNT(DISTINCT dh.customer_phone)             AS active_customers
+    FROM driver_handshakes dh
+    LEFT JOIN claims       cl ON cl.dealer_id = dh.dealer_id
+                              AND DATE(cl.created_at) = :d
+    LEFT JOIN replacements rp ON rp.tenant_id = :tid
+                              AND DATE(rp.created_at) = :d
+    LEFT JOIN delivery_incentives di ON di.driver_id = dh.driver_id
+                              AND DATE(di.created_at) = :d
+    WHERE dh.tenant_id = :tid
+      AND DATE(dh.handshake_at) = :d
+    GROUP BY dh.dealer_id
+", ['tid' => $tenantId, 'd' => $yesterday]);
+
+foreach ($rows as $row) {
+    DB::statement("
+        INSERT INTO crm_dealer_sales_daily
+          (tenant_id, dealer_id, sale_date, batteries_delivered, claims_raised,
+           replacements_done, incentives_paid, active_customers)
+        VALUES (:tid, :did, :d, :bd, :cr, :rd, :ip, :ac)
+        ON DUPLICATE KEY UPDATE
+          batteries_delivered = VALUES(batteries_delivered),
+          claims_raised       = VALUES(claims_raised),
+          replacements_done   = VALUES(replacements_done),
+          incentives_paid     = VALUES(incentives_paid),
+          active_customers    = VALUES(active_customers),
+          updated_at          = NOW()
+    ", (array)$row + ['tid' => $tenantId, 'd' => $yesterday]);
+}
+```
+
+**API response shape** (for JS charting library):
+```json
+{
+  "series": [
+    { "date": "2026-03-01", "delivered": 14, "claims": 2, "incentives_paid": 140.00 },
+    { "date": "2026-03-02", "delivered": 19, "claims": 1, "incentives_paid": 190.00 }
+  ],
+  "meta": { "dealer_id": 7, "period_days": 90, "total_delivered": 412 }
+}
+```
+
+---
+
+### 9.6 Campaign Performance Analytics
+
+```sql
+-- Delivery funnel per campaign
+SELECT
+    c.id,
+    c.name,
+    c.channel,
+    c.total_recipients,
+    c.sent_count,
+    c.delivered_count,
+    c.opened_count,
+    c.clicked_count,
+    c.failed_count,
+    ROUND(c.delivered_count / NULLIF(c.sent_count, 0) * 100, 1) AS delivery_rate_pct,
+    ROUND(c.opened_count    / NULLIF(c.delivered_count, 0) * 100, 1) AS open_rate_pct,
+    ROUND(c.clicked_count   / NULLIF(c.opened_count, 0) * 100, 1)   AS click_rate_pct,
+    ROUND(c.failed_count    / NULLIF(c.total_recipients, 0) * 100, 1) AS failure_rate_pct
+FROM crm_campaigns c
+WHERE c.tenant_id = :tenant_id
+  AND c.status = 'COMPLETED'
+ORDER BY c.completed_at DESC
+LIMIT 50;
+
+-- Top-performing campaigns for a date range
+SELECT
+    c.name,
+    c.channel,
+    c.clicked_count,
+    ROUND(c.clicked_count / NULLIF(c.delivered_count, 0) * 100, 1) AS ctr_pct,
+    s.name AS scheme_name
+FROM crm_campaigns c
+LEFT JOIN crm_schemes s ON s.id = c.scheme_id
+WHERE c.tenant_id = :tenant_id
+  AND c.dispatched_at BETWEEN :from AND :to
+ORDER BY ctr_pct DESC
+LIMIT 10;
+```
+
+**Stat counters update flow:**  
+`CampaignRecipient::updateStatus()` increments the denormalized counter on `crm_campaigns` using `UPDATE ... SET delivered_count = delivered_count + 1` — safe under concurrent delivery webhook callbacks (MySQL atomic increment).
+
+---
+
+### 9.7 Scheme Attainment Dashboard
+
+```sql
+-- Per-scheme attainment overview (for CRM Manager / Admin)
+SELECT
+    s.name                             AS scheme_name,
+    s.scheme_code,
+    s.valid_from,
+    s.valid_to,
+    COUNT(t.id)                        AS total_dealers,
+    SUM(t.target_hit)                  AS dealers_hit_target,
+    ROUND(AVG(
+        t.volume_achieved / NULLIF(t.volume_target, 0) * 100
+    ), 1)                              AS avg_attainment_pct,
+    SUM(t.volume_achieved)             AS total_units_sold,
+    SUM(t.revenue_achieved)            AS total_revenue_inr
+FROM  crm_schemes s
+JOIN  crm_scheme_dealer_targets t ON t.scheme_id = s.id
+WHERE s.tenant_id = :tenant_id
+  AND s.is_active = 1
+GROUP BY s.id
+ORDER BY s.valid_to ASC;
+
+-- Per-dealer attainment for a specific scheme
+SELECT
+    u.name                             AS dealer_name,
+    t.volume_target,
+    t.volume_achieved,
+    ROUND(t.volume_achieved / NULLIF(t.volume_target, 0) * 100, 1) AS attainment_pct,
+    t.incentive_on_hit                 AS bonus_inr,
+    t.target_hit,
+    t.target_hit_at
+FROM  crm_scheme_dealer_targets t
+JOIN  users u ON u.id = t.dealer_id
+WHERE t.scheme_id = :scheme_id
+  AND t.tenant_id = :tenant_id
+ORDER BY attainment_pct DESC;
+```
+
+---
+
 ## 10. Deployment Notes
 
 ```
@@ -1792,6 +3298,9 @@ Timezone:     mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root mysql
 ```
 * * * * *    php /var/www/bin/process-email-queue.php   # Legacy fallback if QUEUE_DRIVER=db
 0 0 * * *    php /var/www/bin/nightly-audit-reminder.php # EOD scan flag
+30 1 * * *   php /var/www/bin/crm-sales-rollup.php       # DealerSalesRollupJob (01:30 IST)
+0  2 * * 0   php /var/www/bin/crm-churn-detection.php    # ChurnDetectionJob weekly (Sunday 02:00 IST)
+0  3 * * *   php /var/www/bin/crm-scheme-attainment.php  # SchemeService::checkAttainment() nightly
 ```
 
 ### Queue Workers (Supervisor — when `QUEUE_DRIVER=redis`)
@@ -1799,7 +3308,7 @@ Timezone:     mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root mysql
 ```ini
 ; /etc/supervisor/conf.d/battery-worker.conf
 [program:battery-worker]
-command=php /var/www/bin/worker.php --queues=emails,reports,tally
+command=php /var/www/bin/worker.php --queues=emails,reports,tally,crm
 numprocs=2
 autostart=true
 autorestart=true
@@ -1808,7 +3317,7 @@ stdout_logfile=/var/log/battery-worker.log
 
 ```bash
 # Manual start (development)
-php bin/worker.php --queues=emails,reports,tally --sleep=1 --max-jobs=500
+php bin/worker.php --queues=emails,reports,tally,crm --sleep=1 --max-jobs=500
 ```
 
 ### Environment Variables (`.env.example`)
@@ -1860,6 +3369,19 @@ MAIL_USER=
 MAIL_PASS=
 MAIL_FROM=no-reply@battery-mgmt.com
 MAIL_FROM_NAME="Battery Management"
+
+# CRM — Campaign Email
+MAIL_RATE_PER_MIN=200         # campaign blast throttle (emails/min per tenant)
+MAIL_UNSUBSCRIBE_SECRET=      # min 32 random bytes — HMAC salt for unsubscribe tokens
+CAMPAIGN_FROM_NAME=           # defaults to APP_NAME if blank
+CAMPAIGN_FROM_EMAIL=          # defaults to MAIL_FROM if blank
+
+# CRM — WhatsApp (Phase 3)
+WA_BSP_PROVIDER=              # twilio | gupshup | meta_cloud (leave blank to disable WA campaigns)
+WA_API_KEY=
+WA_PHONE_NUMBER_ID=           # BSP registered number ID
+WA_RATE_PER_MIN=80            # messages/min (BSP tier limit)
+WA_TEMPLATE_NAMESPACE=        # pre-approved BSP message template namespace
 ```
 
 ### Upload & Symlink Setup
@@ -2042,6 +3564,76 @@ The following risks were identified during deep architectural review beyond the 
 
 ---
 
+### 11.16 Image Decompression Bomb (Pixel Flood)
+
+| | |
+|---|---|
+| **Leakage Path** | To strip EXIF data, `ImageService.php` uses GD (`imagecreatefromstring`). While the system strictly limits the *file size* to 2MB, an attacker can craft a highly compressed WebP or PNG image that contains enormous internal pixel dimensions (e.g., 50,000 x 50,000 pixels). When loaded via GD, the system immediately attempts to decompress it into uncompressed RAM (which would take ~10GB). |
+| **Business Impact** | Immediate PHP-FPM process crash / Server Out-of-Memory (OOM) leading to severe Denial of Service (DoS) across all tenants. |
+| **Fix** | Before loading the image into memory with GD, read the header sizes using `getimagesize()`. Hard-reject any image with dimensions safely exceeding typical camera outputs (e.g., width > 4000 or height > 4000). |
+
+---
+
+### 11.17 Idempotency Key Race Condition
+
+| | |
+|---|---|
+| **Leakage Path** | The idempotency middleware relies on saving the *completed HTTP response* to `api_idempotency_keys`. If two exact duplicate requests hit the database at perfectly identical timestamps, the middleware will do a `SELECT` and find nothing for *both* threads. Both will process the heavy operation, execute effects, and potentially trigger a DB constraint collision downstream. |
+| **Business Impact** | Double incentive dispatch, duplicate billing, or duplicate claims breaking the tenant sequence. |
+| **Fix** | Alter the middleware to execute an atomic `INSERT` of an "In Flight" record into `api_idempotency_keys` with a `202 Processing` response code *before* passing the request to the controller. A concurrent request will see this active lock and immediately return a `409 Conflict`. |
+
+---
+
+### 11.18 Tally Excel Import XXE & Zip Bomb Attacks
+
+| | |
+|---|---|
+| **Leakage Path** | The system relies on parsing Tally Excel files via queue workers. Because modern `.xlsx` files are intrinsically XML files stored in a ZIP archive, the upload is vulnerable to XML External Entity (XXE) data exfiltration and Zip Decompression Bombs. |
+| **Business Impact** | Remote Code Execution (RCE) via `phpspreadsheet`, Server-Side Request Forgery (SSRF), or a complete disk/memory wipe of the Supervisor worker. |
+| **Fix** | Enforce `libxml_disable_entity_loader(true);` before parsing the Excel document (disables XXE) and enforce strict streaming limits rather than loading entire sheets into RAM simultaneously. |
+
+---
+
+### 11.19 Concurrent OTP Double-Verification
+
+| | |
+|---|---|
+| **Leakage Path** | The document specifies checking the OTP with `hash_equals()`. If the system reads the OTP, passes `hash_equals()`, and *then* attempts `UPDATE otp_tokens SET used = 1`, two concurrent HTTP calls with the same valid OTP can bypass the check instantaneously before the `used` flag commits. |
+| **Business Impact** | Issuance of two valid JWT token pairs for a single successful OTP authentication event, cloning the active session. |
+| **Fix** | Transform the verification step into a single atomic sequence. Execute the update immediately: `UPDATE otp_tokens SET used = 1 WHERE user_id = ? AND token_hash = ? AND used = 0 AND expires_at > NOW()`. If `rowCount() === 1`, proceed to issue the JWT. |
+
+---
+
+### 11.20 Recursive CTE Infinite Loop (Lineage Break)
+
+| | |
+|---|---|
+| **Leakage Path** | The recursive query used to find battery lineage uses `WITH RECURSIVE lineage AS (...)`. If a database glitch or manual migration creates a cycle in `mother_battery_id` (e.g., A -> B -> C -> A), the SQL constraint doesn't block it natively. The CTE will recurse infinitely upon the first query, locking the connection pool. |
+| **Business Impact** | Database query timeout and thread exhaustion (Denial of Service). |
+| **Fix** | Add hard cycle protection inside the CTE. MySQL 8.0 allows `LIMIT 100` inside recursions, or building a path tracker `CONCAT(path, ',', id)` and enforcing `WHERE id NOT IN (path)` throughout the loop. |
+
+---
+
+### 11.21 Soft Delete Unique Key Collision
+
+| | |
+|---|---|
+| **Leakage Path** | The design states `deleted_at TIMESTAMP NULL` for soft deletes and that "the unique fields remain reserved". Therefore, if the tenant administrator deletes a user due to an HR issue, and a year later tries to provision a *new* account for them, Table 1's `UNIQUE KEY uq_tenant_email (tenant_id, email)` will indefinitely block the creation. |
+| **Business Impact** | Poor SaaS UX, forcing the SaaS operator to do manual database operations (DBA script drops) to clear out inactive constraints. |
+| **Fix** | Upgrade to MySQL 8.0's functional/expression indexes. Redefine the constraint as: `UNIQUE KEY idx_tenant_email_live (tenant_id, email, (IF(deleted_at IS NULL, 1, id)))`. This enables soft-deleted records to step natively out of the uniqueness envelope. |
+
+---
+
+### 11.22 JWT Revocation Cache Volatility
+
+| | |
+|---|---|
+| **Leakage Path** | Access token invalidation (`jti` blocklists) are stored in Redis caching (`SET jwt:revoked:{jti}`). If the Redis instance restarts unexpectedly or drops keys due to maxmemory policies, all previously blocked `jti` lists vanish. |
+| **Business Impact** | Revoked (logged-out) access tokens instantly regain their validity for up to 15 minutes, neutralizing immediate lockdown capabilities. |
+| **Fix** | If highly sensitive operations are at risk, fall back to checking the DB's `auth_refresh_tokens` list synchronously, or accept the cache-volatility as a defined risk tolerance. |
+
+---
+
 ## 12. SaaS Architecture & Upgrade Roadmap
 
 ---
@@ -2085,9 +3677,14 @@ EventBus::dispatch(new ClaimStatusChanged($claim, $oldStatus, $newStatus, $actor
 // Listeners registered in bootstrap/events.php
 EventBus::listen(ClaimStatusChanged::class, [
     WriteClaimStatusHistory::class,   // always
-    NotifyOnClaimChange::class,       // always
+    NotifyOnClaimChange::class,       // always — injects tracking URL (§5.22, §14.4)
     AuditClaimChanges::class,         // always
     TriggerIncentiveOnHandshake::class, // only if transition = DELIVERED
+]);
+
+// Also register for ClaimCreated so the welcome email includes tracking URL
+EventBus::listen(ClaimCreated::class, [
+    NotifyOnClaimChange::class,       // sends dealer + customer confirmation with tracking link
 ]);
 ```
 
@@ -2149,8 +3746,13 @@ class SendOtpEmailJob {
 
 ```
 Access token:  HS256-SHA512 · 15 min TTL · payload: {sub, tenant_id, role_ids, iat, exp, jti}
-Refresh token: Opaque 64-byte random · 30-day TTL · stored as SHA-256 hash in `sessions` table
-               Single-use: each refresh call rotates the refresh token (old hash invalidated)
+Refresh token: Opaque 64-byte random · 30-day TTL · stored as SHA-256 hash in
+               `auth_refresh_tokens` table (TABLE 31). Single-use: each refresh
+               call rotates the token (old row's revoked_at is set; new row inserted).
+
+> **Storage split:**
+> - **Web/PHP sessions** → `sessions` table (TABLE 16) — Laravel-style payload blob, no token_hash
+> - **API refresh tokens** → `auth_refresh_tokens` table (TABLE 31) — hashed opaque token, per-device
 ```
 
 **Token issuance flow:**
@@ -2158,10 +3760,18 @@ Refresh token: Opaque 64-byte random · 30-day TTL · stored as SHA-256 hash in 
 ```
 POST /api/v1/auth/verify-otp
   → AuthService::verifyOtp($email, $otp)
+     1. Hash incoming OTP: $hash = hash('sha256', $inputOtp)
+     2. Atomic consume — prevents double-verification (§11.19):
+          UPDATE otp_tokens SET used = 1
+          WHERE  user_id = :uid AND token_hash = :hash
+                 AND used = 0 AND expires_at > NOW()
+          → rowCount() === 0  ⟹  invalid / expired / already used → AuthException
+          → rowCount() === 1  ⟹  token consumed; exactly one thread proceeds
+     (Note: hash_equals() is NOT used here — the atomic UPDATE IS the comparison.)
   → CleanUp login_attempts
   → JwtService::issue($user, $tenant)
      → accessToken  (signed JWT, 15 min)
-     → refreshToken (random_bytes(64), stored hashed)
+     → refreshToken (random_bytes(64), stored hashed in auth_refresh_tokens)
   → Response: { access_token, refresh_token, expires_in: 900 }
 ```
 
@@ -2171,8 +3781,10 @@ POST /api/v1/auth/verify-otp
 POST /api/v1/auth/refresh
   body: { refresh_token: "..." }
   → Hash incoming token with SHA-256
-  → SELECT session WHERE token_hash = ? AND expires_at > now() AND is_revoked = 0
-  → UPDATE session: revoke old row, insert new row (rotation)
+  → SELECT * FROM auth_refresh_tokens
+      WHERE token_hash = ? AND expires_at > NOW() AND revoked_at IS NULL
+  → UPDATE auth_refresh_tokens SET revoked_at = NOW() WHERE id = ?
+  → INSERT INTO auth_refresh_tokens (new row with new token_hash, new expires_at)
   → JwtService::issue() → new access + refresh pair
 ```
 
@@ -2181,7 +3793,7 @@ POST /api/v1/auth/refresh
 - `alg: none` → reject immediately  
 - Expired `exp` → 401 (client must refresh)  
 - Missing `tenant_id` claim → 401  
-- `jti` in revocation list (Redis `SET jwt:revoked:{jti}` with TTL = remaining exp) → 401
+- `jti` in revocation list: check Redis `SET jwt:revoked:{jti}` (TTL = remaining exp) first; on Redis unavailability **fall back to** synchronous DB check `SELECT 1 FROM auth_refresh_tokens WHERE jti = ? AND revoked_at IS NOT NULL` — revocation is never bypassed through a cache restart (§11.22) → 401
 
 ---
 
@@ -2191,7 +3803,7 @@ POST /api/v1/auth/refresh
 
 | Item | What |
 |------|------|
-| Multi-tenancy DB | `tenants`, `plans`, `tenant_settings`, `tenant_sequences` tables; `tenant_id` on all 18 operational tables |
+| Multi-tenancy DB | `tenants`, `plans`, `tenant_settings`, `tenant_sequences` tables; `tenant_id` on all 21 operational tables |
 | Modular folders | `app/Modules/*/` structure as in §3 |
 | JWT auth | `JwtService`, `ApiAuthMiddleware`, `/api/v1/auth/*` routes |
 | Service interfaces | Bind all 6 interfaces in `bootstrap/bindings.php` |
@@ -2207,17 +3819,24 @@ POST /api/v1/auth/refresh
 |------|------|
 | Redis queue | `RedisQueueDriver` + `bin/worker.php` + Supervisor config |
 | Event system | `EventBus::dispatch()` + all 9 core domain events + listeners |
-| Request IDs | `X-Request-ID` header on every response; logged in `audit_logs.request_id` |
+| **Optimistic locking** | Add `version_no INT UNSIGNED DEFAULT 1` to `claims`, `service_jobs`, `tenant_settings`, `users`. PUT endpoints reject with HTTP 409 if `version_no` in body ≠ DB row. |
+| **Soft delete framework** | Add `deleted_at TIMESTAMP NULL` + `deleted_by INT UNSIGNED NULL` to `users`, `claims`, `files`, `tenants`. All queries filter `WHERE deleted_at IS NULL`. Monthly purge cron permanently removes rows older than the data-retention policy. **Unique-key policy (§11.21):** MySQL 8 expression indexes `(IF(deleted_at IS NULL, 1, id))` are used on `(tenant_id, email)` and `(tenant_id, serial_number)` so soft-deleted rows vacate their unique slot — a new record with the same email or serial can be created immediately after deletion. Resurrection of an existing record is `UPDATE … SET deleted_at = NULL` (not a new INSERT). Hard-delete is permanently forbidden on tables with audit-trail dependents (§11.8). |
+| **PlanGuard enforcement** | `PlanGuard::check($tenant, $permission)` before claim create, user invite, bulk export, and API access. Returns 429 with `X-Plan-Limit` header on quota breach. |
+| **Idempotency middleware** | `IdempotencyMiddleware` checks `api_idempotency_keys` (TABLE 34) on 7 critical POST routes: `/claims`, `/handshakes`, `/replacements`, `/incentives/payout`, `/auth/refresh`, `/tally/import`, `/eod/submit`. On first request, atomically inserts a `status='PROCESSING'` stub row before handing off to the controller — a racing duplicate hits the UNIQUE KEY and immediately receives `409 Conflict` (§11.17). On handler completion the row is updated to `status='COMPLETE'` with the cached response. Replays cached response on retry within 24 h. |
+| Request IDs | `X-Request-ID` header on every response; propagated to `audit_logs.request_id`, queue job payloads, and outbox events. Every structured log line MUST include `{request_id, tenant_id, user_id, duration_ms}`. |
 | Report snapshots | Async `GenerateReportJob` → write to `files` table; expire old snapshots |
 | Feature flags | `tenant_settings` key `feature.{name}` → FeatureFlagService |
-| Observability | Structured JSON logs → stdout; ERROR events fire `audit_logs CRITICAL`; health endpoints `/api/v1/health/live` + `/api/v1/health/ready` |
+| Observability | Structured JSON logs → stdout; ERROR events fire `audit_logs CRITICAL`; health endpoints `/api/v1/health/live` + `/api/v1/health/ready`. **Minimum metric set to instrument:** queue lag (PENDING outbox rows older than 30 s), OTP failure rate (per tenant per hour), virus-scan backlog (PENDING files older than 5 min), idempotency replay rate (replays / total requests), refresh-token rotation failures (revoked_at set without new row). |
 
 #### Phase 3 — Mobile & Scale *(6–12 months)*
 
 | Item | What |
 |------|------|
 | Mobile API hardening | Flutter / React Native clients using `/api/v1/*`; push notification channel (FCM) added to `Notifications` module |
+| Mobile offline sync | App queues mutations locally with UUID idempotency keys. On reconnect, POST replay uses idempotency middleware (Phase 2). Conflict policy: server wins on status fields; client wins on GPS / photo fields. |
 | S3 / R2 storage | Flip `STORAGE_DRIVER=r2` in `.env`; existing `files` rows retain `storage_driver=local` pointer |
+| **Per-tenant secrets** | JWT signing secret, SMTP credentials, and storage credentials stored per tenant in HashiCorp Vault or AWS KMS. `encryption_key_id` on `files` (TABLE 28) references the KMS key wrapping the content key. Onboarding flow auto-generates tenant KMS key. |
+| **Read-optimized reporting** | Daily aggregate table `rpt_daily_claims` (tenant_id, date, submitted_count, closed_count, replaced_count). Monthly `rpt_monthly_incentives`. ETL Supervisor worker runs nightly, reducing 30%+ of ad-hoc report load on live tables. |
 | Redis cache | Cache tenant settings (TTL 5 min), heavy report queries (TTL 15 min), battery lineage results (TTL 1 min per ID) using tagged cache invalidation |
 | MySQL read replica | `DB_READ_HOST` in `.env`; `QueryBuilder` routes `SELECT` to replica, writes to primary |
 | API rate limiting | Redis sliding-window counters per `(tenant_id, user_id, route)` — plugged into `ApiAuthMiddleware` |
@@ -2256,7 +3875,547 @@ POST /api/v1/auth/refresh
 
 ---
 
-*Document Version: 3.0 · May 2026 · 30 Tables · 14 Business Logic Sections · 22 Security Controls · 15 Risk Items · SaaS Architecture*
+## 13. CRM Module — Customer Pipeline, Campaigns & Schemes
+
+> **Purpose:** Give every tenant a built-in micro-CRM that converts warranty service contacts into repeat buyers, enables targeted bulk marketing via email and WhatsApp, gives management real-time dealer sales visibility, and lets the parent company push time-bound promotional schemes directly to the dealer network.
 
 ---
 
+### 13.1 CRM Data Architecture Overview
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                         CRM MODULE DATA FLOW                             │
+│                                                                          │
+│  Battery Handshake (HandshakeCaptured event)                             │
+│        │                                                                 │
+│        ▼                                                                 │
+│  AutoEnrichCustomerOnHandshake listener                                  │
+│        │  UPSERT crm_customers (phone as dedup key)                      │
+│        │  Increment total_batteries_bought                               │
+│        │  Set last_purchase_at = NOW()                                   │
+│        ▼                                                                 │
+│  crm_customers (TABLE 39)                                                │
+│        │                                                                 │
+│        ├──── crm_leads (TABLE 40) ◄──── Manual entry / campaign reply    │
+│        │          │                                                      │
+│        │          └──── crm_lead_activities (TABLE 41) — timeline        │
+│        │                                                                 │
+│        └──── crm_campaign_recipients (TABLE 45) ◄── SegmentService       │
+│                       │                                                  │
+│              crm_campaigns (TABLE 44)                                    │
+│                   ├── crm_message_templates (TABLE 42)                   │
+│                   ├── crm_segments (TABLE 43)                            │
+│                   └── crm_schemes (TABLE 47) ← Parent-company offer      │
+│                                                                          │
+│  DealerSalesRollupJob (nightly) ──► crm_dealer_sales_daily (TABLE 49)   │
+│                                          │                               │
+│                           Sales graphs / leaderboard (§9.5)             │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 13.2 Customer Lifecycle Stages
+
+| Stage | Meaning | Trigger |
+|-------|---------|---------|
+| `LEAD` | Phone/email captured but no purchase yet | Manual entry or campaign response |
+| `PROSPECT` | Engaged (lead activity logged, demo given) | Manual stage upgrade via pipeline |
+| `ACTIVE` | Has made at least one battery purchase | First `WON` lead (§5.18) |
+| `REPEAT` | Two or more purchases | Second `WON` lead on same customer |
+| `CHURNED` | No purchase in 180 days + no open lead | Weekly cron (`ChurnDetectionJob`) |
+
+**ChurnDetectionJob (weekly, Sunday 02:00 IST):**
+```sql
+UPDATE crm_customers
+   SET lifecycle_stage = 'CHURNED'
+WHERE lifecycle_stage = 'ACTIVE'
+  AND tenant_id = :tid
+  AND last_purchase_at < NOW() - INTERVAL 180 DAY
+  AND id NOT IN (
+      SELECT customer_id FROM crm_leads
+       WHERE stage NOT IN ('WON','LOST')
+         AND tenant_id = :tid
+  );
+```
+
+---
+
+### 13.3 Dealer Dashboard — Sales Graph Widget
+
+The dealer dashboard renders three charts from `crm_dealer_sales_daily`:
+
+| Chart | Type | Data Series | Period |
+|-------|------|-------------|--------|
+| **Delivery Trend** | Line (batteries_delivered) | Daily deliveries + 7-day MA | Last 90 days |
+| **Revenue vs Incentives** | Grouped Bar | incentives_paid overlay | Last 12 months |
+| **Customer Acquisition** | Area | active_customers per day | Last 30 days |
+
+**Front-end implementation (Vanilla JS ES2020):**
+```javascript
+// public/assets/js/crm-charts.js
+// Uses Chart.js CDN (no build step — matches existing vanilla JS pattern)
+
+async function renderDealerSalesGraph(dealerId, days = 90) {
+  const res = await apiFetch(`/api/v1/crm/dealer-sales/${dealerId}/graph?days=${days}`);
+  const { series } = await res.json();
+
+  new Chart(document.getElementById('deliveryChart'), {
+    type: 'line',
+    data: {
+      labels:   series.map(r => r.date),
+      datasets: [{
+        label: 'Batteries Delivered',
+        data:  series.map(r => r.delivered),
+        tension: 0.3, fill: true,
+      }],
+    },
+    options: { responsive: true, plugins: { legend: { position: 'bottom' } } },
+  });
+}
+```
+
+---
+
+### 13.4 Parent Company Scheme Integration
+
+**Scheme creation flow:**
+
+```
+ADMIN/CRM_MGR (parent company)
+    │
+    ├── POST /api/v1/crm/schemes
+    │     body: { name, type, discount_pct, valid_from, valid_to, target_role }
+    │
+    ├── POST /api/v1/crm/schemes/{id}/targets
+    │     body: [{ dealer_id, volume_target, incentive_on_hit }, ...]
+    │
+    └── Dealer dashboard now shows scheme card:
+          "Sell 50 units in April → earn ₹2,000 bonus"
+          [Progress bar: 32/50 units ███████░░░ 64%]
+          [14 days remaining]
+```
+
+**Scheme types and their marketing use:**
+
+| Type | How it works | Dealer sees |
+|------|-------------|-------------|
+| `DISCOUNT` | % off listed price on new sales; scheme code on invoice | "Use code APR10 for 10% off" |
+| `CASHBACK` | Fixed INR cashback credited per unit after handshake confirmation | "Earn ₹50 cashback per battery" |
+| `VOLUME_INCENTIVE` | Bonus paid when dealer crosses `volume_target` in scheme window | "Sell 50 batteries → ₹2,000 bonus" |
+| `COMBO_OFFER` | Multi-SKU bundle offer (stored as JSON in `terms_text`) | "Buy Type A + Type B → free tester kit" |
+| `LOYALTY` | Tiered incentive based on cumulative `total_batteries_bought` (cross-scheme) | "Platinum dealer: 2× incentive rate" |
+
+**Campaign + Scheme linking:**  
+A campaign can attach `scheme_id` so that the offer details are auto-populated in templates via `{{scheme_name}}`, `{{offer_details}}`, `{{valid_until}}` variables — no manual copy-paste of offer text needed.
+
+---
+
+### 13.5 Bulk Email & WhatsApp Channel Configuration
+
+**Email channel** (extends existing PHPMailer setup):
+
+| Config Key | Description | Default |
+|------------|-------------|---------|
+| `MAIL_RATE_PER_MIN` | Max emails/min for campaign blasts | `200` |
+| `MAIL_UNSUBSCRIBE_SECRET` | HMAC salt for unsubscribe token generation | — (required) |
+| `CAMPAIGN_FROM_NAME` | Sender name override for campaigns | `APP_NAME` |
+| `CAMPAIGN_FROM_EMAIL` | Dedicated campaign sending address | `MAIL_FROM` |
+
+**WhatsApp channel (Phase 3 — BSP integration):**
+
+> `WhatsAppChannel.php` in `app/Modules/Notifications/Channels/` already exists as a stub (§3).  
+> CRM module activates it for campaign use via the same interface.
+
+| Config Key | Description |
+|------------|-------------|
+| `WA_BSP_PROVIDER` | `twilio` \| `gupshup` \| `meta_cloud` |
+| `WA_API_KEY` | BSP API key |
+| `WA_PHONE_NUMBER_ID` | Registered BSP number ID |
+| `WA_RATE_PER_MIN` | Max WA messages/min (BSP tier) — default `80` |
+| `WA_TEMPLATE_NAMESPACE` | Pre-approved WA message template namespace |
+
+**WhatsApp compliance rules (WABA policy):**
+1. Only send to customers who have messaged the business account first (session window) — or use pre-approved BSP templates for outbound (`MARKETING` category)
+2. `crm_opt_outs` enforced on every dispatch — WhatsApp BSP opt-out webhooks mapped to `crm_opt_outs` rows automatically
+3. Message content rendered from `body_text` field of template only; no HTML
+4. Frequency cap: max 2 marketing messages per customer per week enforced in `CampaignService::buildRecipientList()`
+
+```php
+// Frequency cap check (WhatsApp)
+$recentCampaignCount = DB::selectOne("
+    SELECT COUNT(DISTINCT r.campaign_id) AS cnt
+    FROM crm_campaign_recipients r
+    JOIN crm_campaigns c ON c.id = r.campaign_id
+    WHERE r.customer_id = :cid
+      AND r.channel = 'WHATSAPP'
+      AND r.status IN ('SENT','DELIVERED','OPENED')
+      AND c.dispatched_at >= NOW() - INTERVAL 7 DAY
+", ['cid' => $customerId]);
+
+if ($recentCampaignCount->cnt >= 2) {
+    // Skip this customer for this campaign batch
+    $recipient->update(['status' => 'OPTED_OUT', 'failure_reason' => 'frequency_cap']);
+    continue;
+}
+```
+
+---
+
+### 13.6 Security Considerations — CRM Module
+
+| Threat | Mitigation |
+|--------|------------|
+| **SQL injection via segment field names** | Field names from JSON rules are validated against `FIELD_WHITELIST` map before SQL construction (§5.20) — raw string interpolation never used |
+| **Template injection / SSTI** | Message templates rendered via twig-sandbox with restricted allow-list; `eval()` / `extract()` forbidden; template stored as raw text, rendered at dispatch only |
+| **Unsubscribe token forgery** | Token = SHA-256(recipient_id + campaign_id + `MAIL_UNSUBSCRIBE_SECRET`); stored hashed; single-use flag prevents replay |
+| **Customer PII exposure (bulk export)** | `GET /api/v1/crm/customers` returns paginated rows only; no bulk CSV dump endpoint without explicit `reports.export` permission |
+| **WhatsApp spam / unsolicited messages** | Opt-out table enforced; weekly frequency cap (≤2 campaigns/7 days) hard-coded in service; WABA pre-approved templates required for `MARKETING` category |
+| **Campaign impersonation (IDOR)** | All campaign/customer/lead endpoints scope `WHERE tenant_id = JWT.tenant_id`; dealers further scoped to `WHERE dealer_id = JWT.user_id` |
+| **Mass assignment on customer update** | `CustomerController::update()` accepts only allow-listed fields: `name`, `email`, `city`, `state`, `pincode`, `notes` |
+| **Scheme backdating fraud** | `SchemeService::create()` enforces `valid_from >= TODAY`; targets cannot be altered once any campaign references the scheme |
+
+---
+
+### 13.7 CRM Phase Roadmap
+
+| Phase | Item | What |
+|-------|------|------|
+| **Phase 2** | Customer auto-enrichment | `AutoEnrichCustomerOnHandshake` listener goes live with HandshakeCaptured event |
+| **Phase 2** | Lead pipeline | Manual lead management, stage transitions, activity log |
+| **Phase 2** | Dealer sales graph | `DealerSalesRollupJob` nightly + chart widget |
+| **Phase 2** | Scheme management | Parent-company scheme CRUD + dealer target assignment |
+| **Phase 3** | Email campaigns | Segment builder + template engine + PHPMailer dispatch + unsubscribe |
+| **Phase 3** | WhatsApp campaigns | BSP integration (`WA_BSP_PROVIDER`) + frequency cap + opt-out webhook |
+| **Phase 3** | Campaign analytics | Delivery funnel dashboard (§9.6) |
+| **Phase 4** | Automated journeys | Time-based drip sequences (e.g., warranty expiry reminder 30 days before) |
+| **Phase 4** | AI offer personalisation | ML scoring model ranks scheme relevance per customer based on purchase history |
+| **Phase 4** | Referral tracking | `referral_code` on `crm_customers`; credit dealer when referred customer purchases |
+
+---
+
+## 14. Public Repair Status Tracking
+
+> **Purpose:** Let customers and dealers check claim repair progress with a single click — no login required.  
+> A unique tracking link is embedded in every claim confirmation and status-change email/WhatsApp message.  
+> Customers can also enter their ticket number on a public lookup page to retrieve the same link.
+
+---
+
+### 14.1 Tracking Page Data Model
+
+The JSON payload returned by `GET /api/v1/track/{token}` and used to render the HTML tracking page:
+
+```json
+{
+  "claim_number": "ACME-CLM-2026-00001",
+  "current_status": "AT_SERVICE",
+  "current_status_label": "Battery at Service Centre",
+  "current_status_description": "Our technicians are inspecting your battery.",
+  "battery_serial_masked": "**********1234",
+  "dealer_name": "Sunrise Auto Parts",
+  "service_centre_name": "Central Battery Service Hub",
+  "created_at": "2026-04-10T08:30:00+05:30",
+  "last_updated_at": "2026-04-12T14:22:00+05:30",
+  "timeline": [
+    {
+      "status": "SUBMITTED",
+      "label": "Claim Submitted",
+      "description": "Your claim has been received.",
+      "occurred_at": "2026-04-10T08:30:00+05:30"
+    },
+    {
+      "status": "DRIVER_RECEIVED",
+      "label": "Picked Up by Driver",
+      "description": "Our driver has collected the battery.",
+      "occurred_at": "2026-04-11T10:05:00+05:30"
+    },
+    {
+      "status": "AT_SERVICE",
+      "label": "Battery at Service Centre",
+      "description": "Our technicians are inspecting your battery.",
+      "occurred_at": "2026-04-12T14:22:00+05:30"
+    }
+  ],
+  "is_closed": false,
+  "tracking_expires_at": "2026-07-10T08:30:00+05:30",
+  "dealer_contact": {
+    "name": "Sunrise Auto Parts",
+    "city": "Mumbai"
+  }
+}
+```
+
+> **Note:** Customer phone, email, and full address are NEVER included. `battery_serial_masked` shows only the last 4 characters (`**********1234`) and is derived server-side. Dealer `city` only — no street address.
+
+---
+
+### 14.2 Claim Status Label Map
+
+All 9 claim states mapped to customer-facing labels, icons, and descriptions for the tracking page:
+
+| State | Customer Label | Icon | Customer-Facing Description |
+|---|---|---|---|
+| `DRAFT` | Claim Being Prepared | 📋 | Your dealer is preparing the claim details. |
+| `SUBMITTED` | Claim Submitted | ✅ | Your claim has been received and is being reviewed. |
+| `DRIVER_RECEIVED` | Picked Up by Driver | 🚗 | Our driver has collected the battery from your dealer. |
+| `IN_TRANSIT` | Battery in Transit | 🚚 | Your battery is on its way to the service centre. |
+| `AT_SERVICE` | Battery at Service Centre | 🔧 | Our technicians are inspecting your battery. |
+| `DIAGNOSED` | Diagnosis Complete | 🔍 | We have completed the diagnosis. Your case is being processed. |
+| `REPLACED` | Replacement Dispatched | 📦 | A replacement battery is on its way back to your dealer. |
+| `READY_FOR_RETURN` | Ready for Pickup | 🎉 | Your repaired/replaced battery is ready. Contact your dealer to arrange pickup. |
+| `CLOSED` | Service Complete | ✔️ | Your service request has been completed. Thank you. |
+
+```php
+// app/Modules/Tracking/Services/ClaimStatusLabels.php
+
+class ClaimStatusLabels
+{
+    private const MAP = [
+        'DRAFT'            => ['label' => 'Claim Being Prepared',      'icon' => '📋',
+                               'desc'  => 'Your dealer is preparing the claim details.'],
+        'SUBMITTED'        => ['label' => 'Claim Submitted',           'icon' => '✅',
+                               'desc'  => 'Your claim has been received and is being reviewed.'],
+        'DRIVER_RECEIVED'  => ['label' => 'Picked Up by Driver',       'icon' => '🚗',
+                               'desc'  => 'Our driver has collected the battery from your dealer.'],
+        'IN_TRANSIT'       => ['label' => 'Battery in Transit',        'icon' => '🚚',
+                               'desc'  => 'Your battery is on its way to the service centre.'],
+        'AT_SERVICE'       => ['label' => 'Battery at Service Centre', 'icon' => '🔧',
+                               'desc'  => 'Our technicians are inspecting your battery.'],
+        'DIAGNOSED'        => ['label' => 'Diagnosis Complete',        'icon' => '🔍',
+                               'desc'  => 'We have completed the diagnosis. Your case is being processed.'],
+        'REPLACED'         => ['label' => 'Replacement Dispatched',    'icon' => '📦',
+                               'desc'  => 'A replacement battery is on its way back to your dealer.'],
+        'READY_FOR_RETURN' => ['label' => 'Ready for Pickup',          'icon' => '🎉',
+                               'desc'  => 'Your battery is ready. Contact your dealer to arrange pickup.'],
+        'CLOSED'           => ['label' => 'Service Complete',          'icon' => '✔️',
+                               'desc'  => 'Your service request has been completed. Thank you.'],
+    ];
+
+    public static function forCustomer(string $status): array
+    {
+        return self::MAP[$status] ?? ['label' => $status, 'icon' => '⏳', 'desc' => ''];
+    }
+}
+```
+
+---
+
+### 14.3 Ticket Number Lookup Page
+
+**URL:** `/track` (GET) — renders a simple HTML form  
+**Action:** `POST /track/lookup` — resolves ticket number to tracking token
+
+**UI flow:**
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  🔍  Track Your Battery Service                         │
+│                                                         │
+│  Enter your ticket / claim number:                      │
+│  ┌─────────────────────────────────────────────────┐    │
+│  │  ACME-CLM-2026-00001                            │    │
+│  └─────────────────────────────────────────────────┘    │
+│                                                         │
+│  [ Track Now → ]                                        │
+│                                                         │
+│  Tip: Your ticket number is in the confirmation         │
+│  email or WhatsApp message you received.                │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Error states shown on the same page (no redirect on error):**
+
+| Condition | Message shown |
+|---|---|
+| Ticket not found | "We could not find a claim with that ticket number. Please check and try again." |
+| Token expired | "The tracking link for this ticket has expired. Please contact your dealer." |
+| Rate-limited (429) | "Too many attempts. Please wait a few minutes and try again." |
+| Invalid format | "Please enter a valid ticket number (e.g. ACME-CLM-2026-00001)." |
+
+**Rate-limit implementation (TABLE 52):**
+
+```php
+// Max 10 lookup attempts per IP per 15-minute window
+$count = DB::queryOne(
+    'SELECT COUNT(*) AS n FROM ticket_lookup_attempts
+      WHERE ip_address = ? AND attempted_at > NOW() - INTERVAL 15 MINUTE',
+    [$_SERVER['REMOTE_ADDR']]
+)['n'];
+
+if ($count >= 10) {
+    http_response_code(429);
+    return ['error' => 'Too many attempts. Please wait a few minutes.'];
+}
+```
+
+---
+
+### 14.4 Email & WhatsApp Tracking URL Injection
+
+**Email template snippet** (injected into every claim email body — TABLE 20):
+
+```html
+<!-- Tracking link block — appended above email footer -->
+<div style="margin:24px 0; text-align:center;">
+  <a href="{{tracking_url}}"
+     style="background:#1a73e8; color:#fff; padding:12px 28px;
+            border-radius:6px; text-decoration:none; font-size:15px;">
+    🔍 Track Repair Progress
+  </a>
+  <p style="font-size:12px; color:#666; margin-top:8px;">
+    No login required. This link is valid for 90 days.
+  </p>
+</div>
+```
+
+**WhatsApp message template** (pre-approved UTILITY category — no login required):
+
+```
+*Battery Service Update* 🔧
+
+Hi {{customer_name}},
+
+Your claim *{{claim_number}}* status has been updated to:
+*{{status_label}}* — {{status_description}}
+
+Track your repair progress anytime (no login needed):
+{{tracking_url}}
+
+Dealer: {{dealer_name}}
+— {{tenant_name}} Support Team
+```
+
+> **Template category:** `UTILITY` (not MARKETING) — auto-approved by WhatsApp / BSP.  
+> Template name convention: `repair_status_update_v1` — register in BSP dashboard before go-live.
+
+**Events that trigger the notification + URL injection:**
+
+| Event | Trigger | Email | WhatsApp |
+|---|---|---|---|
+| `ClaimCreated` | Claim created by dealer | ✅ Welcome + tracking link | ✅ (Phase 3) |
+| `ClaimStatusChanged` | Any state transition | ✅ Status update + tracking link | ✅ (Phase 3) |
+| `DiagnosisCompleted` | Diagnosis notes added | ✅ Diagnosis summary | ✅ (Phase 3) |
+| `ReplacementAssigned` | Replacement battery assigned | ✅ Replacement dispatched | ✅ (Phase 3) |
+
+---
+
+### 14.5 WhatsApp Bot Flow (Phase 3/4)
+
+**Keyword trigger:** Customer sends any of `STATUS`, `TRACK`, `REPAIR`, or pastes their ticket number to the BSP-registered number.
+
+```
+Incoming WhatsApp message from customer
+          ↓
+WhatsApp Webhook POST /api/v1/webhooks/whatsapp
+          ↓
+WhatsAppBotController::handle()
+  1. Extract sender phone number from payload
+  2. Normalize message body → uppercase; strip whitespace
+  3. If body matches /^[A-Z0-9]+-CLM-\d{4}-\d{5}$/ → treat as ticket number
+     Else if body IN ('STATUS', 'TRACK', 'REPAIR') → prompt for ticket number:
+       Reply: "Please reply with your claim ticket number
+               (e.g. ACME-CLM-2026-00001) to track your repair."
+  4. Look up claim by ticket number (tenant-scoped by inbound phone number → tenant)
+     If not found → Reply: "We couldn't find that claim number.
+                            Please check the ticket in your confirmation email."
+  5. Build status reply using ClaimStatusLabels::forCustomer()
+  6. Append tracking URL from TrackingService::getOrCreateToken()
+  7. Send reply via WhatsAppChannel::send()
+```
+
+**WhatsApp bot reply format:**
+
+```
+Your repair status for *ACME-CLM-2026-00001*:
+
+🔧 *Battery at Service Centre*
+Our technicians are inspecting your battery.
+
+📅 Last updated: 12 Apr 2026, 2:22 PM
+
+🔗 Full tracking page (no login needed):
+https://track.yourdomain.com/track/3fa2c84d...
+
+Reply STATUS anytime to check your repair progress.
+```
+
+**Rate-limit:** WhatsApp bot replies are debounced — no more than 1 automated reply per phone number per 5 minutes (Redis TTL key: `wa:bot:ratelimit:{phone}`).
+
+---
+
+### 14.6 Security Considerations
+
+| Risk | Mitigation |
+|---|---|
+| **Token enumeration** | 256-bit random token (64-char hex) — brute-force requires 2²⁵⁶ attempts; infeasible |
+| **Claim number enumeration via lookup** | TABLE 52 rate-limit: max 10 attempts / IP / 15 min; generic error messages never confirm claim existence |
+| **Cross-tenant data leak** | Lookup always scopes `WHERE tenant_id = TenantContext::id()`; token resolution does not — but token is cryptographically bound to a single claim which carries a `tenant_id` |
+| **PII exposure on tracking page** | Only show: claim number, status, battery serial (last 4 chars masked), dealer name, dealer city. Never expose: customer phone, email, address, full battery serial, or replacement battery serial |
+| **Token forwarding / unauthorized sharing** | By design, the URL is shareable (ticket-based access). Customers are informed: "Anyone with this link can view your repair status." |
+| **Expired token misuse** | `expires_at` checked on every request; expired tokens return a safe "link expired" message — no data returned |
+| **HTTPS enforcement** | `Strict-Transport-Security: max-age=31536000; includeSubDomains` header; HTTP requests redirected 301 to HTTPS; tracking links generated with `https://` scheme only |
+| **WhatsApp webhook spoofing** | BSP webhook signature verified via HMAC-SHA256 (`X-Hub-Signature-256` header) before any processing |
+| **Token in server logs** | Access logs should be configured to NOT log full `/track/{token}` path — mask with `/track/[REDACTED]` in Nginx log format |
+
+**Nginx log masking example:**
+
+```nginx
+# In nginx.conf — mask tracking tokens from access log
+map $uri $masked_uri {
+    ~^/track/([a-f0-9]{64})$ /track/[REDACTED];
+    default                   $uri;
+}
+log_format masked_main '$remote_addr - $remote_user [$time_local] '
+    '"$request_method $masked_uri $server_protocol" '
+    '$status $body_bytes_sent "$http_referer" "$http_user_agent"';
+access_log /var/log/nginx/access.log masked_main;
+```
+
+---
+
+### 14.7 Tracking Module Folder Structure
+
+```
+app/Modules/Tracking/
+├── Controllers/
+│   └── TrackingController.php
+│       ├── resolve(string $token): Response     ← GET /track/{token} + /api/v1/track/{token}
+│       ├── lookup(Request $req): Response        ← POST /track/lookup
+│       └── page(): Response                      ← GET /track  (lookup form)
+├── Services/
+│   └── TrackingService.php
+│       ├── issue(Claim $claim): string           ← Generate + store token; return URL
+│       ├── getOrCreateToken(int $claimId): string ← Idempotent
+│       ├── resolve(string $token): ?array        ← Resolve token → masked payload
+│       └── maskPayload(array $row): array        ← Apply PII masking rules (§14.6)
+├── Repositories/
+│   └── TrackingRepository.php
+│       ├── findByToken(string $token): ?array
+│       ├── findByClaimId(int $claimId): ?array
+│       ├── upsert(array $data): void
+│       └── incrementViewCount(string $token): void
+└── Routes/
+    └── public.php                                ← No auth middleware
+```
+
+---
+
+### 14.8 Tracking Phase Roadmap
+
+| Phase | Feature | Notes |
+|---|---|---|
+| **Phase 2** | Token issuance on claim creation | `TrackingService::issue()` called from `ClaimService::create()` |
+| **Phase 2** | HTML tracking page | Vanilla JS; progressive enhancement; no framework dependency |
+| **Phase 2** | Token injection in emails | `NotifyOnClaimChange` updated (§5.22) |
+| **Phase 2** | Ticket number lookup + rate limiting | TABLE 52; 10/IP/15min cap |
+| **Phase 3** | WhatsApp tracking link in status updates | Feature-flagged: `features.whatsapp_tracking_alerts` |
+| **Phase 3** | WhatsApp bot (keyword + ticket number) | BSP webhook; HMAC verification |
+| **Phase 3** | Repair status push notifications (PWA) | Web Push API; token stored in `push_subscriptions` |
+| **Phase 4** | Estimated completion date | ML-based ETA from historical service time |
+| **Phase 4** | Customer feedback on claim closure | 1-click thumbs-up/down on CLOSED status page; stored in `claim_feedback` |
+
+---
+
+*Document Version: 4.1 · April 2026 · 52 Tables · 22 Business Logic Sections · 31 Security Controls · 22 Risk Items · SaaS + CRM + Public Repair Tracking*

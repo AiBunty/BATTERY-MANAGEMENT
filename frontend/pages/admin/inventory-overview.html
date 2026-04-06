@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inventory Overview</title>
+  <link rel="stylesheet" href="../../assets/css/base.css">
+  <link rel="stylesheet" href="../../assets/css/theme.css">
+  <link rel="stylesheet" href="../../assets/css/layout.css">
+  <link rel="stylesheet" href="../../assets/css/components.css">
+  <link rel="stylesheet" href="../../assets/css/utilities.css">
+</head>
+<body data-page="inventory-overview" data-role="INV_MGR">
+  <div id="app-shell"></div>
+  <section class="u-hidden" data-page-content>
+    <div class="u-mb-16">
+      <h1>Inventory Overview</h1>
+      <p class="u-muted">Stock, transit, and return inventory health</p>
+    </div>
+    <div class="content-grid">
+      <article class="card card--kpi col-4"><div class="kpi-value">1,284</div><p class="u-muted">Units In Stock</p></article>
+      <article class="card card--kpi col-4"><div class="kpi-value">96</div><p class="u-muted">Pending Dispatch</p></article>
+      <article class="card card--kpi col-4"><div class="kpi-value">42</div><p class="u-muted">Returns In Transit</p></article>
+      <article class="card col-12">
+        <strong>Low Stock SKUs</strong>
+        <table class="table">
+          <thead><tr><th>SKU</th><th>Warehouse</th><th>Available</th><th>Threshold</th></tr></thead>
+          <tbody>
+            <tr><td>AM-95AH</td><td>BLR-01</td><td>18</td><td>40</td></tr>
+            <tr><td>AM-120AH</td><td>PNE-02</td><td>12</td><td>25</td></tr>
+          </tbody>
+        </table>
+      </article>
+    </div>
+  </section>
+  <script type="module" src="../../assets/js/app.js"></script>
+</body>
+</html>

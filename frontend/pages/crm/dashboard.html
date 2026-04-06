@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CRM Dashboard</title>
+  <link rel="stylesheet" href="../../assets/css/base.css">
+  <link rel="stylesheet" href="../../assets/css/theme.css">
+  <link rel="stylesheet" href="../../assets/css/layout.css">
+  <link rel="stylesheet" href="../../assets/css/components.css">
+  <link rel="stylesheet" href="../../assets/css/utilities.css">
+</head>
+<body data-page="crm-dashboard" data-role="CRM_MGR">
+  <div id="app-shell"></div>
+  <section class="u-hidden" data-page-content>
+    <div class="u-mb-16">
+      <h1>CRM Dashboard</h1>
+      <p class="u-muted">Leads pipeline and campaign performance overview</p>
+    </div>
+    <div class="content-grid">
+      <article class="card card--kpi col-4"><div class="kpi-value" id="kpi-open-leads">—</div><p class="u-muted">Open Leads</p></article>
+      <article class="card card--kpi col-4"><div class="kpi-value" id="kpi-active-campaigns">—</div><p class="u-muted">Active Campaigns</p></article>
+      <article class="card card--kpi col-4"><div class="kpi-value" id="kpi-total-leads">—</div><p class="u-muted">Total Leads</p></article>
+      <article class="card col-12">
+        <div class="u-flex u-between u-center u-mb-12"><strong>Pipeline Snapshot</strong><button class="btn btn--primary">Open Kanban</button></div>
+        <div class="u-flex u-gap-12" id="pipeline-badges"><span class="u-muted">Loading…</span></div>
+      </article>
+    </div>
+  </section>
+  <script type="module" src="../../assets/js/app.js"></script>
+  <script type="module">
+    import { fetchDashboardStats } from '../../assets/js/crm.js';
+    import { showToast } from '../../assets/js/ui.js';
+
+    const STAGE_CLASS = {
+      NEW:       'badge badge--warning',
+      CONTACTED: 'badge badge--warning',
+      QUALIFIED: 'badge badge--warning',
+      PROPOSAL:  'badge',
+      WON:       'badge badge--success',
+      LOST:      'badge badge--danger',
+    };
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      try {
+        const res = await fetchDashboardStats();
+        const { leads_by_stage = {}, open_leads = 0, active_campaigns = 0 } = res?.data ?? {};
+
+        document.getElementById('kpi-open-leads').textContent        = String(open_leads);
+        document.getElementById('kpi-active-campaigns').textContent  = String(active_campaigns);
+
+        const total = Object.values(leads_by_stage).reduce((s, n) => s + Number(n), 0);
+        document.getElementById('kpi-total-leads').textContent = String(total);
+
+        const badgesEl = document.getElementById('pipeline-badges');
+        if (Object.keys(leads_by_stage).length) {
+          badgesEl.innerHTML = Object.entries(leads_by_stage)
+            .map(([stage, count]) => `<span class="${STAGE_CLASS[stage] ?? 'badge'}">${stage}: ${count}</span>`)
+            .join('');
+        } else {
+          badgesEl.innerHTML = '<span class="u-muted">No leads data.</span>';
+        }
+      } catch (err) {
+        showToast(err.message ?? 'Failed to load dashboard', 'error');
+      }
+    });
+  </script>
+</body>
+</html>

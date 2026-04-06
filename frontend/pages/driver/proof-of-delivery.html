@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Proof Of Delivery</title>
+  <link rel="stylesheet" href="../../assets/css/base.css">
+  <link rel="stylesheet" href="../../assets/css/theme.css">
+  <link rel="stylesheet" href="../../assets/css/layout.css">
+  <link rel="stylesheet" href="../../assets/css/components.css">
+  <link rel="stylesheet" href="../../assets/css/utilities.css">
+</head>
+<body data-page="driver-pod" data-role="DRIVER">
+  <div id="app-shell"></div>
+  <section class="u-hidden" data-page-content>
+    <div class="u-mb-16">
+      <h1>Proof Of Delivery</h1>
+      <p class="u-muted">Capture receiver confirmation for task <strong id="task-id-label">—</strong></p>
+    </div>
+    <div class="content-grid">
+      <article class="card col-7">
+        <div class="u-mb-12"><strong>Confirmation Details</strong></div>
+        <div class="u-mb-12">
+          <label>Receiver Name</label>
+          <input id="receiver-name" class="input" type="text" placeholder="Receiver full name">
+        </div>
+        <div class="u-mb-12">
+          <label>Receiver Mobile</label>
+          <input id="receiver-phone" class="input" type="tel" placeholder="+91-XXXXXXXXXX">
+        </div>
+        <div class="u-mb-12">
+          <label>Dealer Signature (paste signed payload)</label>
+          <textarea id="signature-input" class="input" rows="3" placeholder="base64 or text payload"></textarea>
+        </div>
+        <button id="submit-pod-btn" class="btn btn--primary" type="button">Submit POD</button>
+      </article>
+      <article class="card col-5">
+        <strong>Delivery Status</strong>
+        <p class="u-muted u-mt-8">Attach photo evidence before submitting.</p>
+        <button class="btn btn--secondary" type="button">Upload Photo</button>
+        <div id="pod-result" class="u-mt-12" style="display:none">
+          <p class="u-muted">Handshake ID: <strong id="handshake-id-out"></strong></p>
+          <a class="btn btn--secondary" href="route-today.html">Back to Route</a>
+        </div>
+      </article>
+    </div>
+  </section>
+  <script type="module" src="../../assets/js/app.js"></script>
+  <script type="module">
+    import { completePodTask } from '../../assets/js/driver.js';
+    import { showToast } from '../../assets/js/ui.js';
+
+    function getTaskId() {
+      const params = new URLSearchParams(window.location.search);
+      return parseInt(params.get('task_id') ?? '0', 10);
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      const taskId = getTaskId();
+      const label = document.getElementById('task-id-label');
+      if (label) label.textContent = taskId ? String(taskId) : '(no task selected)';
+
+      const btn = document.getElementById('submit-pod-btn');
+      if (btn) {
+        btn.addEventListener('click', async () => {
+          if (!taskId) { showToast('No task selected', 'error'); return; }
+          const sig = (document.getElementById('signature-input')?.value ?? '').trim();
+          const name = (document.getElementById('receiver-name')?.value ?? '').trim();
+          if (!sig)  { showToast('Signature is required', 'warning'); return; }
+          if (!name) { showToast('Receiver name is required', 'warning'); return; }
+
+          btn.disabled = true;
+          btn.textContent = 'Submitting…';
+          try {
+            const res = await completePodTask({
+              taskId,
+              batchPhoto: 'pod-photo.webp',
+              dealerSignature: sig,
+            });
+            showToast('POD recorded. Handshake: ' + res?.data?.handshake_id, 'success');
+            document.getElementById('pod-result').style.display = '';
+            document.getElementById('handshake-id-out').textContent = String(res?.data?.handshake_id ?? '');
+            btn.style.display = 'none';
+          } catch (err) {
+            showToast(err.message ?? 'POD submission failed', 'error');
+            btn.disabled = false;
+            btn.textContent = 'Submit POD';
+          }
+        });
+      }
+    });
+  </script>
+</body>
+</html>

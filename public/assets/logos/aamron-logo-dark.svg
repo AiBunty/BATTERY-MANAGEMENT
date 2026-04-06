@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="70" viewBox="0 0 260 70" role="img" aria-label="AAMRON Batteries Dark">
+  <rect width="260" height="70" rx="10" fill="#0e3d27"/>
+  <rect x="8" y="8" width="244" height="54" rx="8" fill="#151a17"/>
+  <circle cx="34" cy="35" r="16" fill="#a6cf4a"/>
+  <path d="M30 25h8l-5 9h6l-11 13 3-9h-6z" fill="#174f31"/>
+  <text x="60" y="39" fill="#f5fbf6" font-size="24" font-family="Segoe UI, Tahoma, sans-serif" font-weight="700" letter-spacing="1">AAMRON</text>
+  <text x="61" y="54" fill="#9cc9ab" font-size="10" font-family="Segoe UI, Tahoma, sans-serif" letter-spacing="2">BATTERIES</text>
+</svg>

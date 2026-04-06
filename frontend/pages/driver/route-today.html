@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Driver Route Today</title>
+  <link rel="stylesheet" href="../../assets/css/base.css">
+  <link rel="stylesheet" href="../../assets/css/theme.css">
+  <link rel="stylesheet" href="../../assets/css/layout.css">
+  <link rel="stylesheet" href="../../assets/css/components.css">
+  <link rel="stylesheet" href="../../assets/css/utilities.css">
+</head>
+<body data-page="driver-route" data-role="DRIVER">
+  <div id="app-shell"></div>
+  <section class="u-hidden" data-page-content>
+    <div class="u-flex u-between u-center u-mb-16">
+      <div><h1>Today's Route</h1><p class="u-muted" id="route-meta">Loading route…</p></div>
+      <span id="route-status-badge"></span>
+    </div>
+    <div id="tasks-container" class="content-grid">
+      <article class="card col-12"><p class="u-muted">Loading tasks…</p></article>
+    </div>
+    <div class="state u-mt-12" id="offline-banner" style="display:none">
+      Offline mode — <span id="offline-count">0</span> action(s) queued for sync.
+    </div>
+  </section>
+  <script type="module" src="../../assets/js/app.js"></script>
+  <script type="module">
+    import { fetchActiveRoute } from '../../assets/js/driver.js';
+    import { showToast } from '../../assets/js/ui.js';
+    import { getQueueSize } from '../../assets/js/offline-queue.js';
+
+    const TASK_BADGE = {
+      PENDING: 'badge badge--warning',
+      ACTIVE:  'badge badge--warning',
+      DONE:    'badge badge--success',
+      SKIPPED: 'badge',
+    };
+
+    function renderTasks(tasks) {
+      const container = document.getElementById('tasks-container');
+      if (!container) return;
+      if (!tasks.length) {
+        container.innerHTML = '<article class="card col-12"><p class="u-muted">No tasks assigned for today.</p></article>';
+        return;
+      }
+      container.innerHTML = tasks.map((t, i) => `
+        <article class="card col-12">
+          <div class="u-flex u-between u-center u-mb-8">
+            <strong>Stop ${i + 1}: ${t.claim_number ?? 'N/A'}</strong>
+            <span class="${TASK_BADGE[t.status] ?? 'badge'}">${t.status}</span>
+          </div>
+          <p class="u-muted">Task: ${t.task_type} | Claim status: ${t.claim_status ?? '—'}</p>
+          ${t.status !== 'DONE' ? `<a class="btn btn--primary" style="margin-top:8px" href="proof-of-delivery.html?task_id=${t.id}">Complete POD</a>` : ''}
+        </article>
+      `).join('');
+    }
+
+    document.addEventListener('DOMContentLoaded', async () => {
+      const queueSize = typeof getQueueSize === 'function' ? getQueueSize() : 0;
+      if (queueSize > 0) {
+        document.getElementById('offline-banner').style.display = '';
+        document.getElementById('offline-count').textContent = String(queueSize);
+      }
+
+      try {
+        const res = await fetchActiveRoute();
+        const { route, tasks } = res?.data ?? {};
+
+        const meta = document.getElementById('route-meta');
+        const badgeEl = document.getElementById('route-status-badge');
+
+        if (!route) {
+          if (meta) meta.textContent = 'No route scheduled for today.';
+          renderTasks([]);
+          return;
+        }
+
+        if (meta) meta.textContent = `Route date: ${route.route_date} | Tasks: ${tasks.length}`;
+        if (badgeEl) {
+          const cls = route.status === 'COMPLETED' ? 'badge badge--success' : 'badge badge--warning';
+          badgeEl.innerHTML = `<span class="${cls}">${route.status}</span>`;
+        }
+        renderTasks(tasks);
+      } catch (err) {
+        showToast(err.message ?? 'Failed to load route', 'error');
+        renderTasks([]);
+      }
+    });
+  </script>
+</body>
+</html>
